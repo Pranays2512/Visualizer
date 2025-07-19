@@ -1,14 +1,15 @@
-# /Users/pranay./PycharmProjects/PythonProject/ui/main_window.py
+# /ui/main_window.py
 
 import os, sys, tempfile, subprocess
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QTextEdit, QLabel,
-                             QHBoxLayout, QGraphicsDropShadowEffect, QSplitter, QMainWindow, QGraphicsOpacityEffect, QStackedWidget)
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QTextEdit, QLabel, QHBoxLayout,
+                             QGraphicsDropShadowEffect, QSplitter, QMainWindow, QStackedWidget,
+                             QGraphicsOpacityEffect, QSizePolicy)
 from PyQt5.QtGui import QColor, QFont
-from PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, QRect, QEvent
+from PyQt5.QtCore import Qt, QPropertyAnimation, QRect, QSize
 
 from .code_editor import CodeEditor
 from analysis.complexity import ComplexityAnalyzer
-# The visualizer is now imported from the ui subpackage
+from .dynamic_layout_manager import DynamicCanvas
 from .visualizer import UIVisualizer
 
 
@@ -22,7 +23,7 @@ class FrostedCompiler(QMainWindow):
     def initUI(self):
         self.setWindowTitle("Frosted Glass Python Compiler")
         self.resize(1200, 700)
-        self.setMinimumSize(800, 500)
+        self.setMinimumSize(900, 600)
         self.setStyleSheet("background: transparent;")
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setWindowFlags(Qt.Window | Qt.CustomizeWindowHint | Qt.WindowMinimizeButtonHint |
@@ -37,11 +38,12 @@ class FrostedCompiler(QMainWindow):
         self.main_layout.setContentsMargins(25, 25, 25, 25)
         self.main_layout.setSpacing(20)
         self.editor_layout, self.editor_split = QHBoxLayout(), QSplitter(Qt.Horizontal)
+        self.editor_split.setHandleWidth(2)
 
         self.code_editor = CodeEditor()
         self.code_editor.setPlaceholderText("Write your Python code here...")
         self.code_editor.setFont(QFont("Fira Code", 14))
-        self.apply_editor_theme()
+        self.apply_editor_theme()  # This call is now safe
         self._apply_shadow(self.code_editor, 25)
 
         right_column, right_widget = QVBoxLayout(), QWidget()
@@ -59,15 +61,13 @@ class FrostedCompiler(QMainWindow):
             self._apply_shadow(box)
             return box
 
-        # --- Use a QStackedWidget to manage the views ---
         self.view_stack = QStackedWidget()
 
-        # Page 0: Standard view (input and output boxes)
+        # Page 0: Standard view
         standard_view_widget = QWidget()
         standard_view_layout = QVBoxLayout(standard_view_widget)
         standard_view_layout.setContentsMargins(0, 0, 0, 0)
         standard_view_layout.setSpacing(20)
-
         self.input_box = make_box(fixed_height=150)
         self.output_area = make_box(readonly=True)
         standard_view_layout.addWidget(self.input_box)
@@ -75,14 +75,14 @@ class FrostedCompiler(QMainWindow):
         self.view_stack.addWidget(standard_view_widget)
 
         # Page 1: Visualization canvas
-        self.visualization_canvas = QWidget()
+        self.visualization_canvas = DynamicCanvas()
         self.visualization_canvas.setStyleSheet(self.get_code_editor_style())
         self._apply_shadow(self.visualization_canvas)
         self.view_stack.addWidget(self.visualization_canvas)
+        self.visualization_canvas.needs_resize.connect(self.adjust_splitter_if_needed)
 
-        # Add the main components to the right column
         right_column.addWidget(self.input_label)
-        right_column.addWidget(self.view_stack) # The stack now manages the space
+        right_column.addWidget(self.view_stack)
         right_widget.setLayout(right_column)
 
         self.editor_split.addWidget(self.code_editor)
@@ -94,9 +94,23 @@ class FrostedCompiler(QMainWindow):
         self._setup_buttons()
         QVBoxLayout(central_widget).addWidget(self.container)
 
-        # Pass the canvas to the visualizer
-        # Corrected line for ui/main_window.py
         self.visualizer = UIVisualizer(self, self.code_editor, self.visualization_canvas)
+
+    def adjust_splitter_if_needed(self, required_size: QSize):
+        editor_width, right_panel_width = self.editor_split.sizes()
+        # FIX: Use .width() from the QSize object, not .right()
+        padded_required_width = required_size.width() + 40
+        if padded_required_width <= right_panel_width: return
+
+        total_width = editor_width + right_panel_width
+        min_editor_width = 300
+        new_right_width = padded_required_width
+        new_editor_width = total_width - new_right_width
+
+        if new_editor_width < min_editor_width:
+            new_editor_width = min_editor_width
+            new_right_width = total_width - new_editor_width
+        self.editor_split.setSizes([new_editor_width, new_right_width])
 
     def _setup_buttons(self):
         button_layout = QHBoxLayout();
@@ -145,20 +159,24 @@ class FrostedCompiler(QMainWindow):
         key = f"editor_style_{self.is_dark}"
         if key not in self._cached_styles:
             dark_style = """
-                background-color: rgba(30, 30, 30, 0.95);
-                color: #ffffff;
-                border-radius: 12px;
-                padding: 15px;
-                font-family: 'Fira Code', 'Consolas', monospace;
-                border: 1px solid #444444;
+                QWidget {
+                    background-color: rgba(30, 30, 30, 0.95);
+                    color: #ffffff;
+                    border-radius: 12px;
+                    padding: 15px;
+                    font-family: 'Fira Code', 'Consolas', monospace;
+                    border: 1px solid #444444;
+                }
             """
             light_style = """
-                background-color: rgba(255, 255, 255, 0.95);
-                color: #1e1e1e;
-                border-radius: 12px;
-                padding: 15px;
-                font-family: 'Fira Code', 'Consolas', monospace;
-                border: 1px solid #e0e0e0;
+                QWidget {
+                    background-color: rgba(255, 255, 255, 0.95);
+                    color: #1e1e1e;
+                    border-radius: 12px;
+                    padding: 15px;
+                    font-family: 'Fira Code', 'Consolas', monospace;
+                    border: 1px solid #e0e0e0;
+                }
             """
             self._cached_styles[key] = dark_style if self.is_dark else light_style
         return self._cached_styles[key]
@@ -181,9 +199,8 @@ class FrostedCompiler(QMainWindow):
 
     def toggle_theme(self):
         self.is_dark = not self.is_dark
-        # Update all relevant widgets with the new style
         for w in [self.code_editor, self.input_box, self.output_area, self.visualization_canvas]:
-            w.setStyleSheet(self.get_code_editor_style())
+            if w: w.setStyleSheet(self.get_code_editor_style())
         self.apply_editor_theme()
 
     def _fade_out_input_label(self):
@@ -199,22 +216,21 @@ class FrostedCompiler(QMainWindow):
 
     def _fade_in_input_label(self):
         if self._ui_state['input_faded']:
-            self.fade_anim.setStartValue(0.0)
+            self.fade_anim.setDirection(QPropertyAnimation.Forward)
+            self.fade_anim.setStartValue(self.input_opacity.opacity())
             self.fade_anim.setEndValue(1.0)
             self.fade_anim.start()
             self._ui_state['input_faded'] = False
 
     def _switch_to_visualize_view(self):
-        if not self._ui_state['merged']:
+        if self.view_stack.currentIndex() != 1:
             self._fade_out_input_label()
-            self.view_stack.setCurrentIndex(1) # Switch to visualization canvas
-            self._ui_state['merged'] = True
+            self.view_stack.setCurrentIndex(1)
 
     def _switch_to_standard_view(self):
-        if self._ui_state['merged']:
+        if self.view_stack.currentIndex() != 0:
             self._fade_in_input_label()
-            self.view_stack.setCurrentIndex(0) # Switch back to standard view
-            self._ui_state['merged'] = False
+            self.view_stack.setCurrentIndex(0)
 
     def visualize_code(self):
         self._switch_to_visualize_view()
@@ -223,59 +239,38 @@ class FrostedCompiler(QMainWindow):
     def run_code(self):
         self._switch_to_standard_view()
         code, input_text = self.code_editor.toPlainText().strip(), self.input_box.toPlainText()
-        self.code_editor.run_code_analysis()
+        if hasattr(self.code_editor, 'run_code_analysis'):
+            self.code_editor.run_code_analysis()
         with tempfile.NamedTemporaryFile(suffix='.py', delete=False, mode='w', encoding='utf-8') as temp_file:
             temp_file.write(code)
             temp_filename = temp_file.name
-
         try:
-            result = subprocess.run([sys.executable, temp_filename], input=input_text, capture_output=True, text=True, timeout=5)
+            result = subprocess.run([sys.executable, temp_filename], input=input_text, capture_output=True, text=True,
+                                    timeout=5)
             self.output_area.setPlainText(result.stdout if result.returncode == 0 else result.stderr)
         except Exception as e:
             self.output_area.setPlainText(f"Error: {e}")
         finally:
-            try: os.unlink(temp_filename)
-            except OSError: pass
+            try:
+                os.unlink(temp_filename)
+            except OSError:
+                pass
 
     def analyze_code_complexity(self):
         self._switch_to_standard_view()
         code = self.code_editor.toPlainText().strip()
-        if not code:
-            self.output_area.setPlainText("No code to analyze.")
-            return
-        complexity = ComplexityAnalyzer().analyze(code)
-        self.output_area.setPlainText(
-            f"--- Complexity Analysis ---\n\nTime Complexity: {complexity['time']}\nSpace Complexity: {complexity['space']}"
-        )
-
-    def adjust_splitter_for_width(self, required_width):
-        """Adjusts the splitter to give the visualizer canvas more space."""
-        editor_width, right_panel_width = self.editor_split.sizes()
-
-        # Add some padding for better spacing
-        padded_required_width = required_width + 40
-
-        # Only adjust if more space is actually needed
-        if padded_required_width <= right_panel_width:
-            return
-
-        total_width = editor_width + right_panel_width
-        min_editor_width = 300  # Don't let the editor get too small
-
-        new_right_width = padded_required_width
-        new_editor_width = total_width - new_right_width
-
-        # Ensure the editor doesn't become unusable
-        if new_editor_width < min_editor_width:
-            new_editor_width = min_editor_width
-            new_right_width = total_width - new_editor_width
-
-        self.editor_split.setSizes([new_editor_width, new_right_width])
+        if not code: self.output_area.setPlainText("No code to analyze."); return
+        try:
+            complexity = ComplexityAnalyzer().analyze(code)
+            self.output_area.setPlainText(
+                f"--- Complexity Analysis ---\n\nTime Complexity: {complexity['time']}\nSpace Complexity: {complexity['space']}"
+            )
+        except Exception as e:
+            self.output_area.setPlainText(f"Could not analyze complexity: {e}")
 
     def reset(self):
         self._switch_to_standard_view()
         self.code_editor.clear()
         self.output_area.clear()
         self.input_box.clear()
-        # Reset splitter to its default size
         self.editor_split.setSizes([800, 400])
