@@ -78,14 +78,13 @@ class FrostedCompiler(QMainWindow):
         self.visualization_canvas = DynamicCanvas()
         self.visualization_canvas.setStyleSheet(self.get_code_editor_style())
         self._apply_shadow(self.visualization_canvas)
-
-        # Set minimum size for the canvas
-        self.visualization_canvas.setMinimumSize(600, 400)
-
         self.view_stack.addWidget(self.visualization_canvas)
 
         right_column.addWidget(self.input_label)
-        right_column.addWidget(self.view_stack)
+        # --- MODIFIED: Added stretch factor of 1 to the view_stack ---
+        # This is the critical fix for this file. It tells the layout to give all
+        # extra vertical space to the canvas area, allowing it to expand.
+        right_column.addWidget(self.view_stack, 1)
         right_widget.setLayout(right_column)
 
         self.editor_split.addWidget(self.code_editor)
@@ -98,6 +97,8 @@ class FrostedCompiler(QMainWindow):
         QVBoxLayout(central_widget).addWidget(self.container)
 
         self.visualizer = UIVisualizer(self, self.code_editor, self.visualization_canvas)
+
+    # ... rest of the file remains the same ...
 
     def _setup_buttons(self):
         button_layout = QHBoxLayout();
@@ -191,7 +192,6 @@ class FrostedCompiler(QMainWindow):
         self.apply_editor_theme()
 
     def _reset_canvas_on_view_change(self):
-        """Reset canvas state when switching between views"""
         if hasattr(self.visualizer, 'stop'):
             self.visualizer.stop()
 
