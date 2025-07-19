@@ -43,7 +43,7 @@ class FrostedCompiler(QMainWindow):
         self.code_editor = CodeEditor()
         self.code_editor.setPlaceholderText("Write your Python code here...")
         self.code_editor.setFont(QFont("Fira Code", 14))
-        self.apply_editor_theme()  # This call is now safe
+        self.apply_editor_theme()
         self._apply_shadow(self.code_editor, 25)
 
         right_column, right_widget = QVBoxLayout(), QWidget()
@@ -74,12 +74,15 @@ class FrostedCompiler(QMainWindow):
         standard_view_layout.addWidget(self.output_area)
         self.view_stack.addWidget(standard_view_widget)
 
-        # Page 1: Visualization canvas
+        # Page 1: Enhanced Visualization canvas
         self.visualization_canvas = DynamicCanvas()
         self.visualization_canvas.setStyleSheet(self.get_code_editor_style())
         self._apply_shadow(self.visualization_canvas)
+
+        # Set minimum size for the canvas
+        self.visualization_canvas.setMinimumSize(600, 400)
+
         self.view_stack.addWidget(self.visualization_canvas)
-        self.visualization_canvas.needs_resize.connect(self.adjust_splitter_if_needed)
 
         right_column.addWidget(self.input_label)
         right_column.addWidget(self.view_stack)
@@ -95,22 +98,6 @@ class FrostedCompiler(QMainWindow):
         QVBoxLayout(central_widget).addWidget(self.container)
 
         self.visualizer = UIVisualizer(self, self.code_editor, self.visualization_canvas)
-
-    def adjust_splitter_if_needed(self, required_size: QSize):
-        editor_width, right_panel_width = self.editor_split.sizes()
-        # FIX: Use .width() from the QSize object, not .right()
-        padded_required_width = required_size.width() + 40
-        if padded_required_width <= right_panel_width: return
-
-        total_width = editor_width + right_panel_width
-        min_editor_width = 300
-        new_right_width = padded_required_width
-        new_editor_width = total_width - new_right_width
-
-        if new_editor_width < min_editor_width:
-            new_editor_width = min_editor_width
-            new_right_width = total_width - new_editor_width
-        self.editor_split.setSizes([new_editor_width, new_right_width])
 
     def _setup_buttons(self):
         button_layout = QHBoxLayout();
@@ -203,6 +190,11 @@ class FrostedCompiler(QMainWindow):
             if w: w.setStyleSheet(self.get_code_editor_style())
         self.apply_editor_theme()
 
+    def _reset_canvas_on_view_change(self):
+        """Reset canvas state when switching between views"""
+        if hasattr(self.visualizer, 'stop'):
+            self.visualizer.stop()
+
     def _fade_out_input_label(self):
         if not self._ui_state['input_faded']:
             self.input_opacity = getattr(self, 'input_opacity', QGraphicsOpacityEffect(self.input_label))
@@ -229,6 +221,7 @@ class FrostedCompiler(QMainWindow):
 
     def _switch_to_standard_view(self):
         if self.view_stack.currentIndex() != 0:
+            self._reset_canvas_on_view_change()
             self._fade_in_input_label()
             self.view_stack.setCurrentIndex(0)
 
