@@ -10,7 +10,7 @@ import json
 
 # Import from your existing files
 from .dynamic_layout_manager import (
-    GraphicsObjectWidget, SmoothAnimation, ParticleEffect,
+    GraphicsObjectWidget, SmoothAnimation, EnhancedParticleEffect as ParticleEffect,
     FONT_FAMILY, ANIMATION_DURATION, GLOW_COLOR, PINK_COLOR,
     LINE_COLOR, SCOPE_COLOR, BACKGROUND_COLOR, HOVER_SCALE
 )
@@ -109,7 +109,7 @@ class ArrayWidget(GraphicsObjectWidget):
 
         path = QPainterPath()
         path.addRoundedRect(rect, 8, 8)
-        painter.fillPath(path, gradient)
+        painter.fillPath(path, QBrush(gradient))
 
         # Border
         border_color = LINE_COLOR.lighter(120) if self.is_hovering else LINE_COLOR
@@ -318,7 +318,7 @@ class StringWidget(GraphicsObjectWidget):
 
         path = QPainterPath()
         path.addRoundedRect(rect, 8, 8)
-        painter.fillPath(path, gradient)
+        painter.fillPath(path, QBrush(gradient))
 
         # Border
         painter.setPen(QPen(QColor("#50fa7b"), 1.5))
@@ -484,7 +484,7 @@ class LinkedListWidget(GraphicsObjectWidget):
 
         path = QPainterPath()
         path.addRoundedRect(rect, 8, 8)
-        painter.fillPath(path, gradient)
+        painter.fillPath(path, QBrush(gradient))
 
         # Border
         painter.setPen(QPen(QColor("#bd93f9"), 1.5, Qt.DashLine))
@@ -716,7 +716,7 @@ class TreeWidget(GraphicsObjectWidget):
 
         path = QPainterPath()
         path.addRoundedRect(rect, 8, 8)
-        painter.fillPath(path, gradient)
+        painter.fillPath(path, QBrush(gradient))
 
         # Border
         painter.setPen(QPen(QColor("#f1fa8c"), 1.5, Qt.DashLine))
@@ -846,8 +846,7 @@ class DictionaryWidget(GraphicsObjectWidget):
         path = QPainterPath()
         path.addRoundedRect(rect, 10, 10)
 
-        # The fix is to pass the 'gradient' as the second argument
-        painter.fillPath(path, gradient)  # CORRECTED LINE
+        painter.fillPath(path, QBrush(gradient))
 
         pen = QPen(QColor("#ff79c6"), 1.5, Qt.DashLine)
         painter.setPen(pen)

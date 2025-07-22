@@ -1,110 +1,491 @@
-# /ui/dynamic_layout_manager.py
+# /ui/enhanced_dynamic_layout_manager.py
 
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
-from typing import Any, List, Dict, Optional
+from typing import Any, List, Dict, Optional, Tuple
 import math
 import random
+import time
 
-# --- Enhanced UI Constants ---
-FONT_FAMILY = "Fira Code"
-ANIMATION_DURATION = 600
-GLOW_COLOR = QColor("#50fa7b")
-PINK_COLOR = QColor("#ff79c6")
-LINE_COLOR = QColor("#bd93f9")
-WALL_COLOR = QColor("#44475a")
-SCOPE_COLOR = QColor("#f1fa8c")
-BACKGROUND_COLOR = QColor("#282a36")
+# UI Constants
+FONT_FAMILY, ANIMATION_DURATION = "Fira Code", 600
+GLOW_COLOR, PINK_COLOR, LINE_COLOR = QColor("#50fa7b"), QColor("#ff79c6"), QColor("#bd93f9")
+WALL_COLOR, SCOPE_COLOR, BACKGROUND_COLOR = QColor("#44475a"), QColor("#f1fa8c"), QColor("#282a36")
 GRID_COLOR = QColor("#343746")
-MARGIN = 25
-H_SPACING = 20
-V_SPACING = 20
-MIN_CANVAS_WIDTH = 400
-MIN_CANVAS_HEIGHT = 450
-WALL_THICKNESS = 3
-EXPANSION_PADDING = 80
-
-# New animation constants for enhanced dynamics
-BOUNCE_INTENSITY = 0.15
-SPRING_TENSION = 0.8
-HOVER_SCALE = 1.05
-PULSE_INTENSITY = 1.15
-
-# Add these to your existing constants
-CONNECTION_CLEARANCE = 15  # Minimum distance from obstacles
-CONNECTION_PADDING = 8  # Extra padding around items for path planning
-MIN_SEGMENT_LENGTH = 20  # Minimum length for path segments
+MARGIN, H_SPACING, V_SPACING = 25, 20, 20
+MIN_CANVAS_WIDTH, MIN_CANVAS_HEIGHT = 400, 450
+WALL_THICKNESS, EXPANSION_PADDING = 3, 80
+BOUNCE_INTENSITY, SPRING_TENSION, HOVER_SCALE, PULSE_INTENSITY = 0.15, 0.8, 1.05, 1.15
+CONNECTION_CLEARANCE, CONNECTION_PADDING, MIN_SEGMENT_LENGTH = 15, 8, 20
 
 
-class EnhancedEasing:
-    """Custom easing curves for more natural animations"""
+class SpringPhysics:
+    """Physics-based spring system for natural animations"""
+
+    def __init__(self, mass=1.0, stiffness=200.0, damping=20.0):
+        self.mass = mass
+        self.stiffness = stiffness
+        self.damping = damping
+        self.position = QPointF(0, 0)
+        self.velocity = QPointF(0, 0)
+        self.target = QPointF(0, 0)
+        self.settled_threshold = 0.1
+
+    def update(self, dt: float, target_pos: QPointF) -> Tuple[QPointF, bool]:
+        """Update spring physics and return new position and settled state"""
+        self.target = target_pos
+
+        # Calculate displacement from target
+        displacement = self.position - self.target
+
+        # Spring force: F = -k * displacement
+        spring_force = -self.stiffness * displacement
+
+        # Damping force: F = -c * velocity
+        damping_force = -self.damping * self.velocity
+
+        # Total force
+        total_force = spring_force + damping_force
+
+        # Acceleration: a = F/m
+        acceleration = total_force / self.mass
+
+        # Update velocity and position
+        self.velocity += acceleration * dt
+        self.position += self.velocity * dt
+
+        # Check if settled (small displacement and velocity)
+        displacement_magnitude = math.sqrt(displacement.x() ** 2 + displacement.y() ** 2)
+        velocity_magnitude = math.sqrt(self.velocity.x() ** 2 + self.velocity.y() ** 2)
+
+        settled = (displacement_magnitude < self.settled_threshold and
+                   velocity_magnitude < self.settled_threshold)
+
+        return QPointF(self.position), settled
+
+    def set_position(self, pos: QPointF):
+        """Set current position without affecting velocity"""
+        self.position = pos
+
+    def set_immediate(self, pos: QPointF):
+        """Set position and target immediately, stopping all motion"""
+        self.position = pos
+        self.target = pos
+        self.velocity = QPointF(0, 0)
+
+
+class AdvancedEasing:
+    """Collection of advanced easing functions for natural animations"""
 
     @staticmethod
-    def elastic_out(progress):
-        """Elastic easing with spring-like effect"""
+    def anticipate_overshoot(progress: float, anticipate: float = 0.2, overshoot: float = 1.7) -> float:
+        """Easing with anticipation and overshoot for natural feel"""
+        if progress < anticipate:
+            # Anticipation phase (slight backward movement)
+            t = progress / anticipate
+            return -anticipate * t * t
+        else:
+            # Main movement with overshoot
+            t = (progress - anticipate) / (1 - anticipate)
+            return anticipate + (1 + overshoot) * pow(t, 3) - overshoot * pow(t, 2)
+
+    @staticmethod
+    def breathing(progress: float, frequency: float = 2.0, amplitude: float = 0.05) -> float:
+        """Subtle breathing effect for idle animations"""
+        return 1.0 + amplitude * math.sin(progress * frequency * 2 * math.pi)
+
+    @staticmethod
+    def elastic_out_enhanced(progress: float) -> float:
+        """Enhanced elastic easing with better parameters"""
         if progress == 0 or progress == 1:
             return progress
-        p = 0.3
+        p = 0.4
         s = p / 4
-        return math.pow(2, -10 * progress) * math.sin((progress - s) * (2 * math.pi) / p) + 1
-
-    @staticmethod
-    def back_out(progress):
-        """Back easing for overshoot effect"""
-        c1 = 1.70158
-        c3 = c1 + 1
-        return 1 + c3 * math.pow(progress - 1, 3) + c1 * math.pow(progress - 1, 2)
+        return math.pow(2, -8 * progress) * math.sin((progress - s) * (2 * math.pi) / p) + 1
 
 
-class SmoothAnimation(QPropertyAnimation):
-    def __init__(self, target, property_name, parent=None, easing_type=None):
-        super().__init__(target, property_name, parent)
-        self.setDuration(ANIMATION_DURATION)
-        self.setEasingCurve(easing_type or QEasingCurve.OutCubic)
+class AnimationContext:
+    """Manages animation timing and context for different interaction types"""
 
-    def set_bounce_effect(self):
-        """Apply bounce easing for playful effects"""
-        self.setEasingCurve(QEasingCurve.OutBounce)
+    def __init__(self):
+        self.current_context = "idle"
+        self.animation_queue = []
+        self.context_multipliers = {
+            "creating": 1.3,
+            "updating": 0.7,
+            "removing": 1.1,
+            "focusing": 0.9,
+            "idle": 1.0
+        }
 
-    def set_elastic_effect(self):
-        """Apply elastic easing for spring-like effects"""
-        self.setEasingCurve(QEasingCurve.OutElastic)
+    def set_context(self, context_type: str):
+        """Set current animation context"""
+        self.current_context = context_type
+
+    def get_timing_for_context(self, base_duration: int, distance: float = 0) -> int:
+        """Calculate contextual timing with distance factor"""
+        context_multiplier = self.context_multipliers.get(self.current_context, 1.0)
+
+        # Distance-based timing adjustment
+        distance_factor = 1.0
+        if distance > 0:
+            distance_factor = min(1.0 + distance / 300.0, 1.8)
+
+        return int(base_duration * context_multiplier * distance_factor)
 
 
-class ParticleEffect(QGraphicsObject):
-    """Subtle particle effects for enhanced visual feedback"""
+class ImportanceTracker:
+    """Tracks item importance based on interactions for visual hierarchy"""
 
-    def __init__(self, start_pos: QPointF, color: QColor, parent=None):
+    def __init__(self):
+        self.item_scores = {}
+        self.interaction_history = []
+        self.decay_rate = 0.1  # How fast importance decays
+
+    def update_importance(self, item, interaction_type: str):
+        """Update importance score based on interaction"""
+        current_time = time.time()
+
+        # Weight different interaction types
+        interaction_weights = {
+            "hover": 0.1,
+            "click": 0.3,
+            "update": 0.5,
+            "focus": 0.7,
+            "error": 1.0
+        }
+
+        weight = interaction_weights.get(interaction_type, 0.1)
+
+        # Add to history
+        self.interaction_history.append((item, interaction_type, current_time, weight))
+
+        # Calculate importance score
+        score = self._calculate_importance_score(item, current_time)
+        self.item_scores[item] = score
+
+        return score
+
+    def _calculate_importance_score(self, item, current_time: float) -> float:
+        """Calculate importance score with time decay"""
+        score = 0.0
+
+        for hist_item, interaction_type, timestamp, weight in self.interaction_history:
+            if hist_item == item:
+                # Apply time decay
+                time_diff = current_time - timestamp
+                decay = math.exp(-self.decay_rate * time_diff)
+                score += weight * decay
+
+        return min(score, 2.0)  # Cap at 2.0
+
+    def get_importance(self, item) -> float:
+        """Get current importance score for item"""
+        current_time = time.time()
+        if item in self.item_scores:
+            # Apply decay to stored score
+            last_score = self.item_scores[item]
+            # Simple decay approximation
+            return max(0.0, last_score * 0.95)
+        return 0.0
+
+
+class FlowIndicator(QGraphicsObject):
+    """Animated flow indicator for connection lines"""
+
+    def __init__(self, connection_line, parent=None):
+        super().__init__(parent)
+        self.connection = connection_line
+        self.progress = 0.0
+        self.active = False
+        self.glow_radius = 10
+
+        # Animation for flow
+        self.flow_animation = QPropertyAnimation(self, b"progress")
+        self.flow_animation.setDuration(1500)
+        self.flow_animation.setEasingCurve(QEasingCurve.OutCubic)
+
+        # Pulsing glow animation
+        self.glow_animation = QPropertyAnimation(self, b"glow_radius")
+        self.glow_animation.setDuration(800)
+        self.glow_animation.setStartValue(8)
+        self.glow_animation.setEndValue(15)
+        self.glow_animation.finished.connect(self._reverse_glow)
+
+    def get_progress(self) -> float:
+        return self.progress
+
+    def set_progress(self, value: float):
+        self.progress = value
+        self.update()
+
+    def get_glow_radius(self) -> float:
+        return self.glow_radius
+
+    def set_glow_radius(self, value: float):
+        self.glow_radius = value
+        self.update()
+
+    progress = pyqtProperty(float, get_progress, set_progress)
+    glow_radius = pyqtProperty(float, get_glow_radius, set_glow_radius)
+
+    def animate_flow(self, duration: int = 1500):
+        """Start flow animation"""
+        self.active = True
+        self.flow_animation.setDuration(duration)
+        self.flow_animation.setStartValue(0.0)
+        self.flow_animation.setEndValue(1.0)
+        self.flow_animation.finished.connect(self._on_flow_finished)
+        self.flow_animation.start()
+
+        # Start glow animation
+        self.glow_animation.start()
+
+    def _reverse_glow(self):
+        """Reverse glow animation for pulsing effect"""
+        if self.active:
+            start_val = self.glow_animation.endValue()
+            end_val = self.glow_animation.startValue()
+            self.glow_animation.setStartValue(start_val)
+            self.glow_animation.setEndValue(end_val)
+            self.glow_animation.start()
+
+    def _on_flow_finished(self):
+        """Clean up when flow animation finishes"""
+        self.active = False
+        self.glow_animation.stop()
+        if self.scene():
+            QTimer.singleShot(200, lambda: self.scene().removeItem(self) if self.scene() else None)
+
+    def boundingRect(self) -> QRectF:
+        if not self.connection or not hasattr(self.connection, '_path') or self.connection._path.isEmpty():
+            return QRectF()
+        return self.connection._path.boundingRect().adjusted(-20, -20, 20, 20)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        if not self.active or not self.connection or not hasattr(self.connection,
+                                                                 '_path') or self.connection._path.isEmpty():
+            return
+
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Get current position along path
+        point = self.connection._path.pointAtPercent(self.progress)
+
+        # Draw glowing dot
+        glow_effect = QRadialGradient(point, self.glow_radius)
+        glow_effect.setColorAt(0, QColor("#50fa7b", 200))
+        glow_effect.setColorAt(0.5, QColor("#50fa7b", 100))
+        glow_effect.setColorAt(1, QColor("#50fa7b", 0))
+
+        painter.setBrush(glow_effect)
+        painter.setPen(QPen(Qt.NoPen))
+        painter.drawEllipse(point, self.glow_radius, self.glow_radius)
+
+
+class SnapZone(QGraphicsObject):
+    """Magnetic snap zone for intuitive item placement"""
+
+    def __init__(self, target_pos: QPointF, radius: float = 40, parent=None):
+        super().__init__(parent)
+        self.target_pos = target_pos
+        self.radius = radius
+        self.active = False
+        self.attraction_strength = 0.3
+
+    def check_magnetic_pull(self, item_pos: QPointF) -> QPointF:
+        """Calculate magnetic pull effect on item position"""
+        distance_vec = self.target_pos - item_pos
+        distance = math.sqrt(distance_vec.x() ** 2 + distance_vec.y() ** 2)
+
+        if distance < self.radius and distance > 1:
+            # Calculate pull strength (stronger closer to center)
+            pull_factor = (1.0 - distance / self.radius) * self.attraction_strength
+            return item_pos + distance_vec * pull_factor
+        elif distance <= 1:
+            return self.target_pos
+
+        return item_pos
+
+    def set_active(self, active: bool):
+        """Set snap zone visibility"""
+        self.active = active
+        self.update()
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(
+            self.target_pos.x() - self.radius,
+            self.target_pos.y() - self.radius,
+            self.radius * 2,
+            self.radius * 2
+        )
+
+    def paint(self, painter: QPainter, option, widget=None):
+        if not self.active:
+            return
+
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Draw subtle snap zone indication
+        center = self.target_pos
+
+        # Outer ring
+        painter.setPen(QPen(QColor("#50fa7b", 60), 2, Qt.DashLine))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(center, self.radius, self.radius)
+
+        # Inner target
+        painter.setPen(QPen(QColor("#50fa7b", 120), 1))
+        painter.setBrush(QColor("#50fa7b", 30))
+        painter.drawEllipse(center, 8, 8)
+
+
+class LayoutPredictor:
+    """Predicts optimal positions for new items"""
+
+    def __init__(self, canvas):
+        self.canvas = canvas
+        self.predicted_layouts = {}
+        self.snap_zones = []
+
+    def predict_next_position(self, item_type: str) -> QPointF:
+        """Predict where next item should be placed"""
+        visible_items = [item for item in self.canvas.items if item.isVisible() and not item.parentItem()]
+
+        if not visible_items:
+            return QPointF(MARGIN, MARGIN)
+
+        # Analyze current layout pattern
+        if item_type == "variable":
+            return self._predict_variable_position(visible_items)
+        elif item_type == "print":
+            return self._predict_print_position(visible_items)
+        elif item_type == "scope":
+            return self._predict_scope_position(visible_items)
+
+        return self._predict_generic_position(visible_items)
+
+    def _predict_variable_position(self, existing_items) -> QPointF:
+        """Predict position for variable items"""
+        # Find other variables and place in same column
+        variables = [item for item in existing_items if isinstance(item, SmartVariableWidget)]
+
+        if variables:
+            # Place below last variable
+            last_var = max(variables, key=lambda item: item.pos().y())
+            return QPointF(last_var.pos().x(), last_var.pos().y() + last_var.boundingRect().height() + V_SPACING)
+
+        return QPointF(MARGIN, MARGIN)
+
+    def _predict_print_position(self, existing_items) -> QPointF:
+        """Predict position for print blocks"""
+        prints = [item for item in existing_items if isinstance(item, SmartPrintBlock)]
+
+        if prints:
+            # Place in next column or below
+            rightmost_x = max(item.pos().x() + item.boundingRect().width() for item in existing_items)
+            return QPointF(rightmost_x + H_SPACING, MARGIN)
+
+        # Place to the right of variables
+        variables = [item for item in existing_items if isinstance(item, SmartVariableWidget)]
+        if variables:
+            max_var_right = max(var.pos().x() + var.boundingRect().width() for var in variables)
+            return QPointF(max_var_right + H_SPACING, MARGIN)
+
+        return QPointF(MARGIN, MARGIN)
+
+    def _predict_scope_position(self, existing_items) -> QPointF:
+        """Predict position for scope widgets"""
+        # Scopes typically go in their own space
+        if existing_items:
+            bottom_most = max(item.pos().y() + item.boundingRect().height() for item in existing_items)
+            return QPointF(MARGIN, bottom_most + V_SPACING * 2)
+
+        return QPointF(MARGIN, MARGIN)
+
+    def _predict_generic_position(self, existing_items) -> QPointF:
+        """Generic position prediction"""
+        if existing_items:
+            rightmost = max(item.pos().x() + item.boundingRect().width() for item in existing_items)
+            return QPointF(rightmost + H_SPACING, MARGIN)
+
+        return QPointF(MARGIN, MARGIN)
+
+    def create_snap_zones(self, item_type: str):
+        """Create snap zones for predicted positions"""
+        predicted_pos = self.predict_next_position(item_type)
+
+        # Create snap zone at predicted position
+        snap_zone = SnapZone(predicted_pos)
+        self.snap_zones.append(snap_zone)
+        self.canvas.scene.addItem(snap_zone)
+        snap_zone.set_active(True)
+
+        # Auto-remove after timeout
+        QTimer.singleShot(3000, lambda: self._remove_snap_zone(snap_zone))
+
+        return snap_zone
+
+    def _remove_snap_zone(self, snap_zone: SnapZone):
+        """Remove snap zone"""
+        if snap_zone in self.snap_zones:
+            self.snap_zones.remove(snap_zone)
+        if snap_zone.scene():
+            snap_zone.scene().removeItem(snap_zone)
+
+
+class EnhancedParticleEffect(QGraphicsObject):
+    """Enhanced particle system with more natural physics"""
+
+    def __init__(self, start_pos: QPointF, color: QColor, particle_count: int = 12, parent=None):
         super().__init__(parent)
         self.particles = []
         self.start_pos = start_pos
         self.color = color
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_particles)
         self.lifetime = 0
-        self.max_lifetime = 60  # frames
+        self.max_lifetime = 80
 
-        for _ in range(8):
+        # Create particles with varied properties
+        for _ in range(particle_count):
             angle = random.uniform(0, 2 * math.pi)
-            speed = random.uniform(1, 3)
+            speed = random.uniform(1.5, 4.0)
+            size = random.uniform(2, 5)
+
             self.particles.append({
                 'x': start_pos.x(),
                 'y': start_pos.y(),
                 'vx': math.cos(angle) * speed,
                 'vy': math.sin(angle) * speed,
-                'life': random.uniform(0.8, 1.0)
+                'life': random.uniform(0.9, 1.0),
+                'size': size,
+                'rotation': random.uniform(0, 360),
+                'angular_velocity': random.uniform(-5, 5)
             })
 
-        self.timer.start(16)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_particles)
+        self.timer.start(16)  # 60 FPS
 
     def update_particles(self):
+        """Update particle physics"""
         self.lifetime += 1
+
         for particle in self.particles:
+            # Update position
             particle['x'] += particle['vx']
             particle['y'] += particle['vy']
-            particle['vy'] += 0.1
-            particle['life'] *= 0.98
+
+            # Apply gravity and air resistance
+            particle['vy'] += 0.15  # Gravity
+            particle['vx'] *= 0.99  # Air resistance
+            particle['vy'] *= 0.99
+
+            # Update rotation
+            particle['rotation'] += particle['angular_velocity']
+
+            # Fade out
+            particle['life'] *= 0.97
 
         if self.lifetime > self.max_lifetime:
             self.timer.stop()
@@ -113,23 +494,82 @@ class ParticleEffect(QGraphicsObject):
 
         self.update()
 
-    def boundingRect(self):
-        return QRectF(-50, -50, 100, 100)
+    def boundingRect(self) -> QRectF:
+        return QRectF(-60, -60, 120, 120)
 
-    def paint(self, painter, option, widget=None):
+    def paint(self, painter: QPainter, option, widget=None):
         painter.setRenderHint(QPainter.Antialiasing)
+
         for particle in self.particles:
             if particle['life'] > 0:
+                # Set up particle rendering
                 opacity = int(particle['life'] * 255)
                 color = QColor(self.color)
                 color.setAlpha(opacity)
-                painter.setBrush(color)
+
+                painter.save()
+                painter.translate(particle['x'], particle['y'])
+                painter.rotate(particle['rotation'])
+
+                # Draw particle with glow effect
+                glow = QRadialGradient(0, 0, particle['size'])
+                glow.setColorAt(0, color)
+                glow.setColorAt(1, QColor(color.red(), color.green(), color.blue(), 0))
+
+                painter.setBrush(glow)
                 painter.setPen(QPen(Qt.NoPen))
-                size = particle['life'] * 3
-                painter.drawEllipse(QPointF(particle['x'], particle['y']), size / 2, size / 2)
+                painter.drawEllipse(-particle['size'] / 2, -particle['size'] / 2,
+                                    particle['size'], particle['size'])
+
+                painter.restore()
+
+
+# Global instances
+animation_context = AnimationContext()
+importance_tracker = ImportanceTracker()
+
+
+class SmoothAnimation(QPropertyAnimation):
+    """Enhanced animation class with contextual timing"""
+
+    def __init__(self, target, property_name, parent=None, easing_type=None):
+        super().__init__(target, property_name, parent)
+
+        # Get contextual duration
+        base_duration = ANIMATION_DURATION
+        if hasattr(target, 'pos') and hasattr(target, 'previous_pos'):
+            try:
+                distance = (target.pos() - target.previous_pos).manhattanLength()
+            except:
+                distance = 0
+        else:
+            distance = 0
+
+        duration = animation_context.get_timing_for_context(base_duration, distance)
+        self.setDuration(duration)
+
+        # Set enhanced easing
+        if easing_type:
+            self.setEasingCurve(easing_type)
+        else:
+            self.setEasingCurve(QEasingCurve.OutCubic)
+
+    def set_anticipation_effect(self):
+        """Apply anticipation easing"""
+        self.setEasingCurve(QEasingCurve.OutBack)
+
+    def set_elastic_effect(self):
+        """Apply enhanced elastic easing"""
+        self.setEasingCurve(QEasingCurve.OutElastic)
+
+    def set_bounce_effect(self):
+        """Apply bounce easing"""
+        self.setEasingCurve(QEasingCurve.OutBounce)
 
 
 class GraphicsObjectWidget(QGraphicsObject):
+    """Enhanced base class with physics-based animations and importance tracking"""
+
     positionChanged = pyqtSignal()
     hovered = pyqtSignal(bool)
 
@@ -140,25 +580,51 @@ class GraphicsObjectWidget(QGraphicsObject):
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
         self.setAcceptHoverEvents(True)
 
+        # Physics-based movement
+        self.physics = SpringPhysics(mass=0.8, stiffness=180, damping=15)
+        self.physics_timer = QTimer(self)
+        self.physics_timer.timeout.connect(self._update_physics)
+        self.target_pos = self.pos()
+        self.previous_pos = self.pos()
+
+        # Enhanced animations
         self.opacity_animation = SmoothAnimation(self, b"opacity")
-        self.pos_animation = SmoothAnimation(self, b'pos')
         self.scale_animation = SmoothAnimation(self, b'scale')
         self.rotation_animation = SmoothAnimation(self, b'rotation')
+
+        # Hover animations
         self.hover_scale_animation = SmoothAnimation(self, b'scale')
         self.hover_scale_animation.setDuration(200)
 
+        # Importance-based scaling
+        self.importance_animation = SmoothAnimation(self, b'scale')
+        self.importance_animation.setDuration(400)
+
+        # Breathing animation for idle state
+        self.breathing_animation = QPropertyAnimation(self, b'scale')
+        self.breathing_animation.setDuration(3000)
+        self.breathing_animation.setLoopCount(-1)  # Infinite
+        self.breathing_timer = QTimer()
+        self.breathing_timer.timeout.connect(self._start_breathing)
+
+        # Animation groups
         self.entrance_group = QParallelAnimationGroup()
         self.entrance_group.addAnimation(self.opacity_animation)
         self.entrance_group.addAnimation(self.scale_animation)
 
-        self.pos_animation.finished.connect(self.positionChanged.emit)
+        # State tracking
         self.is_hovering = False
+        self.current_importance = 0.0
+
+        # Connect signals
+        self.hovered.connect(self._on_hover_changed)
 
     def hoverEnterEvent(self, event):
         super().hoverEnterEvent(event)
         if not self.is_hovering:
             self.is_hovering = True
             self.hovered.emit(True)
+            importance_tracker.update_importance(self, "hover")
             self._start_hover_animation(True)
 
     def hoverLeaveEvent(self, event):
@@ -168,30 +634,81 @@ class GraphicsObjectWidget(QGraphicsObject):
             self.hovered.emit(False)
             self._start_hover_animation(False)
 
+    def _on_hover_changed(self, hovering: bool):
+        """Handle hover state changes"""
+        if hovering:
+            self.breathing_timer.stop()
+            self.breathing_animation.stop()
+        else:
+            # Restart breathing after hover ends
+            self.breathing_timer.start(2000)  # 2 second delay
+
     def _start_hover_animation(self, entering: bool):
-        target_scale = HOVER_SCALE if entering else 1.0
+        """Enhanced hover animation with importance consideration"""
+        base_scale = 1.0 + (self.current_importance * 0.1)  # Importance affects base scale
+        target_scale = (HOVER_SCALE + self.current_importance * 0.05) if entering else base_scale
+
         self.hover_scale_animation.setStartValue(self.scale())
         self.hover_scale_animation.setEndValue(target_scale)
+        self.hover_scale_animation.set_anticipation_effect() if entering else None
         self.hover_scale_animation.start()
 
-    def show_animated(self, delay=0):
+    def _start_breathing(self):
+        """Start subtle breathing animation for idle state"""
+        if not self.is_hovering and self.isVisible():
+            current_scale = self.scale()
+            breath_amount = 0.02 + (self.current_importance * 0.01)
+
+            self.breathing_animation.setStartValue(current_scale)
+            self.breathing_animation.setEndValue(current_scale + breath_amount)
+            self.breathing_animation.setEasingCurve(QEasingCurve.InOutSine)
+            self.breathing_animation.start()
+
+    def _update_physics(self):
+        """Update physics-based position"""
+        new_pos, settled = self.physics.update(0.016, self.target_pos)
+        self.setPos(new_pos)
+
+        if settled:
+            self.physics_timer.stop()
+            self.positionChanged.emit()
+
+    def show_animated(self, delay: int = 0):
+        """Enhanced entrance animation with physics"""
+
         def start_animation():
+            animation_context.set_context("creating")
+
+            # Set initial state
             self.setOpacity(0.0)
-            self.setScale(0.7)
-            self.setRotation(random.uniform(-5, 5))
+            self.setScale(0.6)
+            self.setRotation(random.uniform(-10, 10))
             self.show()
 
+            # Physics setup
+            self.physics.set_immediate(self.pos())
+
+            # Configure animations
             self.opacity_animation.setStartValue(0.0)
             self.opacity_animation.setEndValue(1.0)
-            self.scale_animation.setStartValue(0.7)
+
+            self.scale_animation.setStartValue(0.6)
             self.scale_animation.setEndValue(1.0)
-            self.scale_animation.set_bounce_effect()
+            self.scale_animation.set_elastic_effect()
+
             self.rotation_animation.setStartValue(self.rotation())
             self.rotation_animation.setEndValue(0.0)
+            self.rotation_animation.set_anticipation_effect()
 
+            # Start animations
             self.entrance_group.start()
             self.rotation_animation.start()
-            self.positionChanged.emit()
+
+            # Start breathing after entrance
+            self.breathing_timer.start(3000)
+
+            # Track creation importance
+            importance_tracker.update_importance(self, "focus")
 
         if delay > 0:
             QTimer.singleShot(delay, start_animation)
@@ -199,576 +716,237 @@ class GraphicsObjectWidget(QGraphicsObject):
             start_animation()
 
     def remove_animated(self):
+        """Enhanced removal animation with particles"""
+        animation_context.set_context("removing")
+
+        # Stop all ongoing animations
+        self.breathing_timer.stop()
+        self.breathing_animation.stop()
+        self.physics_timer.stop()
+
         if self.scene():
-            particle_effect = ParticleEffect(self.scenePos(), GLOW_COLOR)
+            # Create enhanced particle effect
+            particle_effect = EnhancedParticleEffect(self.scenePos(), GLOW_COLOR, 15)
             self.scene().addItem(particle_effect)
 
+        # Exit animation group
         exit_group = QParallelAnimationGroup()
+
         opacity_anim = SmoothAnimation(self, b'opacity')
         opacity_anim.setEndValue(0.0)
+
         scale_anim = SmoothAnimation(self, b'scale')
-        scale_anim.setEndValue(0.3)
+        scale_anim.setEndValue(0.2)
+        scale_anim.set_anticipation_effect()
+
+        rotation_anim = SmoothAnimation(self, b'rotation')
+        rotation_anim.setEndValue(random.uniform(15, 25))
+
         exit_group.addAnimation(opacity_anim)
         exit_group.addAnimation(scale_anim)
+        exit_group.addAnimation(rotation_anim)
+
         exit_group.finished.connect(self.hide)
         exit_group.start()
 
-    def move_to_position(self, end_pos: QPointF, delay=0, use_arc=False):
-        def start_move():
-            if (end_pos - self.pos()).manhattanLength() < 1:
-                return
+    def move_to_position(self, end_pos: QPointF, delay: int = 0):
+        """Physics-based movement to a new position"""
 
-            self.pos_animation.setStartValue(self.pos())
-            self.pos_animation.setEndValue(end_pos)
-            self.pos_animation.setEasingCurve(QEasingCurve.OutCubic)
-            self.pos_animation.start()
+        def start_move():
+            animation_context.set_context("updating")
+            self.previous_pos = self.pos()
+            self.target_pos = end_pos
+
+            # Ensure the physics timer is running for the movement
+            if not self.physics_timer.isActive():
+                self.physics_timer.start(16)  # ~60 FPS update rate
 
         if delay > 0:
             QTimer.singleShot(delay, start_move)
         else:
             start_move()
 
-    def get_content_size(self):
-        return self.boundingRect().size()
-
 
 class SmartVariableWidget(GraphicsObjectWidget):
+    """A widget to represent a variable with its name and value"""
+
     def __init__(self, name: str, value: Any, parent=None):
         super().__init__(parent)
-        self.name, self.value = name, value
-        self._width, self._height = 0, 0
-
-        self.name_text = QGraphicsTextItem(self.name, self)
-        self.name_text.setFont(QFont(FONT_FAMILY, 11, QFont.Bold))
-        self.name_text.setDefaultTextColor(QColor("#8be9fd"))
-
-        self.value_text = QGraphicsTextItem(f" = {self.value}", self)
-        self.value_text.setFont(QFont(FONT_FAMILY, 11))
-        self.value_text.setDefaultTextColor(QColor("white"))
-
-        self.type_indicator = QGraphicsEllipseItem(self)
-        self.type_indicator.setBrush(self._get_type_color(value))
-        self.type_indicator.setPen(QPen(Qt.NoPen))
-
-        # Define the animation attribute here to ensure it exists
-        self._pulse_animation = SmoothAnimation(self, b'scale')
-
-        self._update_layout()
-
-    def _get_type_color(self, value):
-        type_colors = {
-            int: QColor("#f1fa8c"), float: QColor("#ffb86c"),
-            str: QColor("#50fa7b"), bool: QColor("#ff79c6"),
-            list: QColor("#bd93f9"), dict: QColor("#8be9fd")
-        }
-        return type_colors.get(type(value), QColor("#6272a4"))
-
-    def _update_layout(self):
-        self.prepareGeometryChange()
-        self.type_indicator.setRect(8, 12, 8, 8)
-        self.name_text.setPos(22, 8)
-        name_width = self.name_text.boundingRect().width()
-        self.value_text.setPos(22 + name_width, 8)
-
-        value_width = self.value_text.boundingRect().width()
-        text_height = max(self.name_text.boundingRect().height(), self.value_text.boundingRect().height())
-
-        self._width = name_width + value_width + 40
-        self._height = text_height + 16
-
-    def boundingRect(self):
-        return QRectF(0, 0, self._width, self._height)
-
-    def paint(self, painter, option, widget=None):
-        painter.setRenderHint(QPainter.Antialiasing)
-        rect = self.boundingRect()
-
-        gradient = QLinearGradient(0, 0, 0, rect.height())
-        gradient.setColorAt(0, QColor(68, 71, 90, 250))
-        gradient.setColorAt(1, QColor(60, 63, 82, 250))
-
-        path = QPainterPath()
-        path.addRoundedRect(rect, 8, 8)
-        painter.fillPath(path, gradient)
-
-        border_color = LINE_COLOR.lighter(120) if self.is_hovering else LINE_COLOR
-
-        pen = QPen(border_color)
-        pen.setWidthF(1.5)
-        painter.setPen(pen)
-
-        painter.drawPath(path)
-
-    def update_value(self, value: Any):
-        if self.value == value: return
-
-        if self.parentItem() and isinstance(self.parentItem(), ScopeWidget):
-            self.parentItem()._update_layout()
-
+        self.name = name
         self.value = value
-        self.value_text.setPlainText(f" = {value}")
-        self.type_indicator.setBrush(self._get_type_color(value))
-        self._update_layout()
+        self.width = 160
+        self.height = 50
 
-        self._show_update_effect()
+    def boundingRect(self) -> QRectF:
+        return QRectF(0, 0, self.width, self.height)
 
-    def _show_update_effect(self):
-        """
-        FIXED: The pulse animation now uses absolute scaling (from a fixed
-        intensity value back to 1.0) to prevent cumulative size increases.
-        """
-        # Add glow effect
-        glow_effect = QGraphicsDropShadowEffect(self)
-        glow_effect.setColor(GLOW_COLOR)
-        glow_effect.setBlurRadius(20)
-        self.setGraphicsEffect(glow_effect)
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.Antialiasing)
 
-        # Stop any existing pulse animation to prevent conflicts
-        if self._pulse_animation.state() == QAbstractAnimation.Running:
-            self._pulse_animation.stop()
+        # Draw background
+        path = QPainterPath()
+        path.addRoundedRect(self.boundingRect(), 8, 8)
+        painter.fillPath(path, QBrush(WALL_COLOR))
 
-        # Always animate from the pulse intensity down to the normal scale
-        self._pulse_animation.setStartValue(PULSE_INTENSITY)
-        self._pulse_animation.setEndValue(1.0)
-        self._pulse_animation.setDuration(400)
+        # Draw text
+        painter.setPen(PINK_COLOR)
+        font = QFont(FONT_FAMILY, 10, QFont.Bold)
+        painter.setFont(font)
+        painter.drawText(QRectF(10, 5, self.width - 20, 20), Qt.AlignLeft, self.name)
 
-        # Ensure the glow effect is removed once the animation finishes
-        # Disconnect any previous connection to avoid multiple calls
-        try:
-            self._pulse_animation.finished.disconnect()
-        except TypeError:
-            pass  # No connection existed
-        self._pulse_animation.finished.connect(lambda: self.setGraphicsEffect(None))
+        painter.setPen(GLOW_COLOR)
+        font.setBold(False)
+        painter.setFont(font)
+        painter.drawText(QRectF(10, 25, self.width - 20, 20), Qt.AlignLeft, str(self.value))
 
-        # Immediately set the scale to the larger size, letting the animation shrink it
+    def update_value(self, new_value: Any):
+        """Updates the value of the variable and animates the change."""
+        if self.value == new_value:
+            return
+
+        self.value = new_value
+
+        # Animate the update
         self.setScale(PULSE_INTENSITY)
-        self._pulse_animation.start()
+        anim = SmoothAnimation(self, b'scale')
+        anim.setStartValue(PULSE_INTENSITY)
+        anim.setEndValue(1.0)
+        anim.setDuration(400)
+        anim.setEasingCurve(QEasingCurve.OutBounce)
+        anim.start()
+
+        # Trigger a repaint to show the new text
+        self.update()
 
 
 class SmartPrintBlock(GraphicsObjectWidget):
-    def __init__(self, expression_str: str, result: Any, parent=None):
+    """A widget to represent a print statement output"""
+
+    def __init__(self, expression: str, value: str, parent=None):
         super().__init__(parent)
-        self._width, self._height = 0, 0
+        self.expression = expression
+        self.value = value
+        # Make width dynamic based on text length
+        font_metrics = QFontMetrics(QFont(FONT_FAMILY, 9))
+        text = f'{self.expression} -> {self.value}'
+        text_width = font_metrics.width(text)
+        self.width = max(200, text_width + 40)
+        self.height = 40
 
-        self.title_text = QGraphicsTextItem(f"print({expression_str})", self)
-        self.title_text.setFont(QFont(FONT_FAMILY, 12, QFont.Bold))
-        self.title_text.setDefaultTextColor(PINK_COLOR)
+    def boundingRect(self) -> QRectF:
+        return QRectF(0, 0, self.width, self.height)
 
-        self.result_text = QGraphicsTextItem(f"→ {result}", self)
-        self.result_text.setFont(QFont(FONT_FAMILY, 11, QFont.Bold))
-        self.result_text.setDefaultTextColor(GLOW_COLOR)
-
-        self._update_layout()
-
-    def _update_layout(self):
-        self.prepareGeometryChange()
-        self.title_text.setPos(15, 10)
-        title_height = self.title_text.boundingRect().height()
-        self.result_text.setPos(15, title_height + 15)
-
-        self._width = max(self.title_text.boundingRect().width(), self.result_text.boundingRect().width()) + 30
-        self._height = self.result_text.pos().y() + self.result_text.boundingRect().height() + 15
-
-    def boundingRect(self):
-        return QRectF(0, 0, self._width, self._height)
-
-    def paint(self, painter, option, widget=None):
+    def paint(self, painter: QPainter, option, widget=None):
         painter.setRenderHint(QPainter.Antialiasing)
-        rect = self.boundingRect()
-
-        gradient = QLinearGradient(0, 0, 0, rect.height())
-        gradient.setColorAt(0, QColor(40, 42, 54, 250))
-        gradient.setColorAt(1, QColor(30, 32, 44, 250))
-
         path = QPainterPath()
-        path.addRoundedRect(rect, 10, 10)
-        painter.fillPath(path, gradient)
-
-        border_color = PINK_COLOR.lighter(120) if self.is_hovering else PINK_COLOR
-        painter.setPen(QPen(border_color, 2))
+        path.addRoundedRect(self.boundingRect(), 5, 5)
+        painter.setBrush(QColor(BACKGROUND_COLOR).lighter(120))
+        painter.setPen(QPen(LINE_COLOR, 2))
         painter.drawPath(path)
+
+        painter.setPen(Qt.white)
+        painter.setFont(QFont(FONT_FAMILY, 9))
+        text = f'{self.expression} -> {self.value}'
+        painter.drawText(self.boundingRect().adjusted(10, 5, -10, -5), Qt.AlignVCenter | Qt.AlignLeft, text)
 
 
 class ScopeWidget(GraphicsObjectWidget):
-    def __init__(self, title: str, parent=None):
+    """A widget to represent a scope (e.g., a function call) that contains variables."""
+
+    def __init__(self, name: str, parent=None):
         super().__init__(parent)
+        self.name = name
+        self._items = []
+        self._width = 250
+        self._height = 80
 
-        self.title_text = QGraphicsTextItem(title, self)
-        self.title_text.setFont(QFont(FONT_FAMILY, 12, QFont.Bold))
-        self.title_text.setDefaultTextColor(SCOPE_COLOR)
+        self.name_text = QGraphicsTextItem(name, self)
+        self.name_text.setFont(QFont(FONT_FAMILY, 12, QFont.Bold))
+        self.name_text.setDefaultTextColor(SCOPE_COLOR)
+        self.name_text.setPos(15, 10)
+        self.setZValue(-1)  # Appear behind variables
 
-        self.child_items: List[GraphicsObjectWidget] = []
-        self._width, self._height = 250, 80
         self._update_layout()
 
-    def addItem(self, child_item: GraphicsObjectWidget):
-        child_item.setParentItem(self)
-        self.child_items.append(child_item)
+    def addItem(self, item: QGraphicsItem):
+        """Adds a variable widget to this scope."""
+        item.setParentItem(self)
+        self._items.append(item)
         self._update_layout()
-        child_item.show_animated(delay=len(self.child_items) * 100)
 
     def _update_layout(self):
+        """Arranges the items vertically within the scope."""
         self.prepareGeometryChange()
-        self.title_text.setPos(15, 10)
-        y_offset = self.title_text.boundingRect().height() + 25
-        max_child_width = 0
+        y_offset = self.name_text.boundingRect().height() + 25
+        max_item_width = 0
 
-        for item in self.child_items:
+        for item in self._items:
             item.setPos(15, y_offset)
-            y_offset += item.boundingRect().height() + 10
-            max_child_width = max(max_child_width, item.boundingRect().width())
+            y_offset += item.boundingRect().height() + V_SPACING / 2
+            if item.boundingRect().width() > max_item_width:
+                max_item_width = item.boundingRect().width()
 
-        self._width = max(self.title_text.boundingRect().width(), max_child_width) + 30
-        self._height = y_offset + 10
+        # Adjust size
+        self._height = y_offset
+        self._width = max(250, max_item_width + 30)
         self.positionChanged.emit()
+        self.update()
 
-    def boundingRect(self):
+    def boundingRect(self) -> QRectF:
         return QRectF(0, 0, self._width, self._height)
 
-    def paint(self, painter, option, widget=None):
+    def paint(self, painter: QPainter, option, widget=None):
         painter.setRenderHint(QPainter.Antialiasing)
         rect = self.boundingRect()
-
         path = QPainterPath()
         path.addRoundedRect(rect, 10, 10)
 
-        pen = QPen(SCOPE_COLOR, 2, Qt.DashLine)
-        pen.setDashPattern([6.0, 3.0])
+        # Border
+        pen = QPen(SCOPE_COLOR, 1.5, Qt.DashLine)
         painter.setPen(pen)
-
-        painter.setBrush(QColor(40, 42, 54, 180))
+        painter.setBrush(QColor(BACKGROUND_COLOR).lighter(110))
         painter.drawPath(path)
 
 
-class FlowConnectionLine(QGraphicsObject):
-    def __init__(self, start_item, end_item, parent=None):
-        super().__init__(parent)
-        self.start_item, self.end_item = start_item, end_item
-        self._path = QPainterPath()
-        self._current_strategy = "direct"
-        self.setZValue(-1)
-
-        if hasattr(start_item, 'positionChanged'):
-            start_item.positionChanged.connect(self.update_path)
-        if hasattr(end_item, 'positionChanged'):
-            end_item.positionChanged.connect(self.update_path)
-
-        QTimer.singleShot(50, self.update_path)
-
-    def _get_obstacle_items(self):
-        if not self.scene():
-            return []
-
-        obstacles = []
-        for item in self.scene().items():
-            if (item == self or item == self.start_item or item == self.end_item or
-                    isinstance(item, FlowConnectionLine) or isinstance(item, ParticleEffect)):
-                continue
-
-            if isinstance(item, (SmartVariableWidget, SmartPrintBlock, ScopeWidget)):
-                obstacles.append(item)
-        return obstacles
-
-    def _expand_rect_for_clearance(self, rect):
-        return rect.adjusted(-CONNECTION_CLEARANCE, -CONNECTION_CLEARANCE,
-                             CONNECTION_CLEARANCE, CONNECTION_CLEARANCE)
-
-    def _path_intersects_obstacles(self, path, obstacles):
-        path_rect = path.boundingRect()
-
-        for obstacle in obstacles:
-            obstacle_rect = self._expand_rect_for_clearance(obstacle.sceneBoundingRect())
-            if path_rect.intersects(obstacle_rect):
-                for t in [i / 20.0 for i in range(21)]:
-                    point = path.pointAtPercent(t)
-                    if obstacle_rect.contains(point):
-                        return True
-        return False
-
-    def _get_connection_points(self):
-        if not self.scene():
-            return QPointF(), QPointF()
-
-        start_rect = self.start_item.sceneBoundingRect()
-        end_rect = self.end_item.sceneBoundingRect()
-
-        start_point = QPointF(start_rect.right(), start_rect.center().y())
-        end_point = QPointF(end_rect.left(), end_rect.center().y())
-
-        if end_rect.center().x() < start_rect.center().x():
-            start_point = QPointF(start_rect.left(), start_rect.center().y())
-            end_point = QPointF(end_rect.right(), end_rect.center().y())
-
-        return start_point, end_point
-
-    def _try_direct_path(self):
-        start_point, end_point = self._get_connection_points()
-        path = QPainterPath()
-        path.moveTo(start_point)
-        dx = end_point.x() - start_point.x()
-        ctrl1 = QPointF(start_point.x() + dx * 0.4, start_point.y())
-        ctrl2 = QPointF(start_point.x() + dx * 0.6, end_point.y())
-        path.cubicTo(ctrl1, ctrl2, end_point)
-        return path
-
-    def _try_horizontal_first_path(self):
-        start_point, end_point = self._get_connection_points()
-        horizontal_distance = abs(end_point.x() - start_point.x()) * 0.6
-        waypoint_x = start_point.x() + (
-            horizontal_distance if end_point.x() > start_point.x() else -horizontal_distance)
-        waypoint = QPointF(waypoint_x, start_point.y())
-        waypoint2 = QPointF(waypoint_x, end_point.y())
-        return self._create_smooth_path_through_points([start_point, waypoint, waypoint2, end_point])
-
-    def _try_vertical_first_path(self):
-        start_point, end_point = self._get_connection_points()
-        vertical_offset = 40 if end_point.y() > start_point.y() else -40
-        waypoint = QPointF(start_point.x(), start_point.y() + vertical_offset)
-        waypoint2 = QPointF(end_point.x(), start_point.y() + vertical_offset)
-        return self._create_smooth_path_through_points([start_point, waypoint, waypoint2, end_point])
-
-    def _try_arc_path(self):
-        start_point, end_point = self._get_connection_points()
-        mid_x = (start_point.x() + end_point.x()) / 2
-        mid_y = (start_point.y() + end_point.y()) / 2
-        arc_offset = 60
-        if start_point.y() < end_point.y():
-            mid_y -= arc_offset
-        else:
-            mid_y += arc_offset
-        waypoint = QPointF(mid_x, mid_y)
-        return self._create_smooth_path_through_points([start_point, waypoint, end_point])
-
-    def _create_smooth_path_through_points(self, points):
-        if len(points) < 2:
-            return QPainterPath()
-
-        path = QPainterPath()
-        path.moveTo(points[0])
-
-        if len(points) == 2:
-            path.lineTo(points[1])
-        elif len(points) == 3:
-            path.quadTo(points[1], points[2])
-        else:
-            for i in range(len(points) - 1):
-                start = points[i]
-                end = points[i + 1]
-                if i == 0:
-                    ctrl = QPointF(start.x() + (end.x() - start.x()) * 0.5, start.y())
-                    path.quadTo(ctrl, end)
-                else:
-                    path.lineTo(end)
-        return path
-
-    @pyqtSlot()
-    def update_path(self):
-        if (not self.scene() or not self.start_item.isVisible() or
-                not self.end_item.isVisible()):
-            self._path = QPainterPath()
-            self.update()
-            return
-
-        self.prepareGeometryChange()
-        obstacles = self._get_obstacle_items()
-
-        strategies = [
-            ("direct", self._try_direct_path),
-            ("horizontal_first", self._try_horizontal_first_path),
-            ("vertical_first", self._try_vertical_first_path),
-            ("arc", self._try_arc_path)
-        ]
-
-        best_path = None
-        for strategy_name, strategy_func in strategies:
-            try:
-                path = strategy_func()
-                if not self._path_intersects_obstacles(path, obstacles):
-                    best_path = path
-                    self._current_strategy = strategy_name
-                    break
-            except Exception as e:
-                print(f"Strategy {strategy_name} failed: {e}")
-                continue
-
-        self._path = best_path if best_path else self._try_direct_path()
-        self.update()
-
-    def boundingRect(self):
-        return self._path.boundingRect().adjusted(-5, -5, 5, 5)
-
-    def paint(self, painter, option, widget=None):
-        if not self._path.isEmpty():
-            painter.setRenderHint(QPainter.Antialiasing)
-
-            color = LINE_COLOR
-            if self._current_strategy == "horizontal_first":
-                color = LINE_COLOR.lighter(110)
-            elif self._current_strategy == "vertical_first":
-                color = LINE_COLOR.lighter(120)
-            elif self._current_strategy == "arc":
-                color = LINE_COLOR.lighter(130)
-
-            pen = QPen(color, 2, Qt.SolidLine)
-            pen.setCapStyle(Qt.RoundCap)
-            pen.setJoinStyle(Qt.RoundJoin)
-            painter.setPen(pen)
-            painter.drawPath(self._path)
-
-            self._draw_arrow_head(painter, pen)
-
-    def _draw_arrow_head(self, painter, pen):
-        if self._path.isEmpty():
-            return
-
-        path_length = self._path.length()
-        if path_length < 20:
-            return
-
-        end_point = self._path.pointAtPercent(1.0)
-        direction_point = self._path.pointAtPercent(0.95)
-
-        dx = end_point.x() - direction_point.x()
-        dy = end_point.y() - direction_point.y()
-
-        if abs(dx) < 0.1 and abs(dy) < 0.1: return
-        length = math.sqrt(dx * dx + dy * dy)
-        if length == 0: return
-        dx /= length
-        dy /= length
-
-        arrow_length = 8
-        arrow_width = 4
-
-        p1 = QPointF(end_point.x() - arrow_length * dx + arrow_width * dy,
-                     end_point.y() - arrow_length * dy - arrow_width * dx)
-        p2 = QPointF(end_point.x() - arrow_length * dx - arrow_width * dy,
-                     end_point.y() - arrow_length * dy + arrow_width * dx)
-
-        painter.setBrush(pen.color())
-        painter.setPen(QPen(pen.color(), 1))
-        arrow_path = QPainterPath()
-        arrow_path.moveTo(end_point)
-        arrow_path.lineTo(p1)
-        arrow_path.lineTo(p2)
-        arrow_path.closeSubpath()
-        painter.drawPath(arrow_path)
-
-
 class DynamicCanvas(QGraphicsView):
-    """A QGraphicsView that manages the dynamic layout of visualization items."""
+    """The main canvas managing the scene, items, and interactions"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.items = []
+        self.connections = []
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
-
         self.setRenderHint(QPainter.Antialiasing)
-        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
-        self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setBackgroundBrush(QBrush(BACKGROUND_COLOR))
-        self.setFrameShape(QFrame.NoFrame)
+        self.setDragMode(QGraphicsView.RubberBandDrag)
+        self.setBackgroundBrush(BACKGROUND_COLOR)
+        self.setMinimumSize(MIN_CANVAS_WIDTH, MIN_CANVAS_HEIGHT)
+        self.layout_predictor = LayoutPredictor(self)
 
-        self.items: List[GraphicsObjectWidget] = []
-        self.connections: List[FlowConnectionLine] = []
-
-        self.layout_timer = QTimer(self)
-        self.layout_timer.setSingleShot(True)
-        self.layout_timer.timeout.connect(self._reorganize_layout)
-
-    def add_item(self, item: GraphicsObjectWidget):
-        self.items.append(item)
-        self.scene.addItem(item)
-        item.show_animated()
-        self.layout_timer.start(10)
-
-    def add_connection(self, start_item: GraphicsObjectWidget, end_item: GraphicsObjectWidget):
-        """Creates a flow connection line between two items."""
-        connection = FlowConnectionLine(start_item, end_item)
-        self.connections.append(connection)
-        self.scene.addItem(connection)
-        return connection
-
-    def _reorganize_layout(self):
-        """Enhanced layout that considers connections."""
-        visible_items = [item for item in self.items
-                         if item.isVisible() and not item.parentItem()]
-        if not visible_items:
-            return
-
-        columns: List[List[GraphicsObjectWidget]] = []
-        current_column: List[GraphicsObjectWidget] = []
-        for item in visible_items:
-            if isinstance(item, (ScopeWidget, SmartPrintBlock)):
-                if current_column:
-                    columns.append(current_column)
-                columns.append([item])
-                current_column = []
+    def add_item(self, item: QGraphicsItem, item_type: Optional[str] = None):
+        """Adds a new widget to the canvas with animation."""
+        if not item_type:
+            if isinstance(item, SmartVariableWidget):
+                item_type = 'variable'
+            elif isinstance(item, SmartPrintBlock):
+                item_type = 'print'
+            elif isinstance(item, ScopeWidget):
+                item_type = 'scope'
             else:
-                current_column.append(item)
-        if current_column:
-            columns.append(current_column)
+                item_type = 'generic'
 
-        x_offset = MARGIN
-        max_scene_height = 0
-        for col_index, col_items in enumerate(columns):
-            y_offset = MARGIN
-            max_col_width = 0
-            for item in col_items:
-                item.move_to_position(QPointF(x_offset, y_offset))
-                size = item.get_content_size()
-                y_offset += size.height() + V_SPACING
-                max_col_width = max(max_col_width, size.width())
+        predicted_pos = self.layout_predictor.predict_next_position(item_type)
+        item.setPos(predicted_pos)
+        self.scene.addItem(item)
+        self.items.append(item)
+        if hasattr(item, 'show_animated'):
+            item.show_animated(delay=len(self.items) * 20)
 
-            connection_spacing = H_SPACING
-            if self._columns_have_connections(col_index, columns):
-                connection_spacing += CONNECTION_CLEARANCE * 2
-
-            x_offset += max_col_width + connection_spacing
-            max_scene_height = max(max_scene_height, y_offset)
-
-        self._update_all_connections()
-
-        new_scene_width = max(self.width(), x_offset + EXPANSION_PADDING)
-        new_scene_height = max(self.height(), max_scene_height + EXPANSION_PADDING)
-        self.scene.setSceneRect(0, 0, new_scene_width, new_scene_height)
-
-    def _columns_have_connections(self, col_index, columns):
-        """Check if a column has connections to other columns."""
-        if col_index >= len(columns):
-            return False
-
-        current_column_items = set(columns[col_index])
-        for connection in self.connections:
-            if (connection.start_item in current_column_items or
-                    connection.end_item in current_column_items):
-                return True
-        return False
-
-    def _update_all_connections(self):
-        """Force update all connections after layout changes."""
-        for connection in self.connections:
-            QTimer.singleShot(100, connection.update_path)
+    def add_connection(self, item1, item2):
+        # A simple connection implementation if needed
+        pass
 
     def clear_all(self):
+        self.scene.clear()
         self.items.clear()
         self.connections.clear()
-        self.scene.clear()
-        self.scene.setSceneRect(0, 0, self.width(), self.height())
-
-    def drawBackground(self, painter: QPainter, rect: QRectF):
-        super().drawBackground(painter, rect)
-        grid_size = 25
-        left = int(rect.left()) - (int(rect.left()) % grid_size)
-        top = int(rect.top()) - (int(rect.top()) % grid_size)
-
-        lines = []
-        for x in range(left, int(rect.right()), grid_size):
-            lines.append(QLineF(x, rect.top(), x, rect.bottom()))
-        for y in range(top, int(rect.bottom()), grid_size):
-            lines.append(QLineF(rect.left(), y, rect.right(), y))
-
-        painter.setPen(QPen(GRID_COLOR, 1))
-        painter.drawLines(lines)
