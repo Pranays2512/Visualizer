@@ -367,16 +367,83 @@ class LayoutPredictor:
         return self._predict_generic_position(visible_items)
 
     def _predict_variable_position(self, existing_items) -> QPointF:
-        """Predict position for variable items"""
-        # Find other variables and place in same column
+        """Predict position for variable items with better column management"""
         variables = [item for item in existing_items if isinstance(item, SmartVariableWidget)]
 
-        if variables:
-            # Place below last variable
-            last_var = max(variables, key=lambda item: item.pos().y())
-            return QPointF(last_var.pos().x(), last_var.pos().y() + last_var.boundingRect().height() + V_SPACING)
+        if not variables:
+            return QPointF(MARGIN, MARGIN)
+
+        # Find the rightmost column position
+        canvas_width = self.canvas.width() - MARGIN
+        current_column_x = MARGIN
+        current_column_items = []
+
+        # Group variables by column (items with similar x positions)
+        columns = {}
+        for var in variables:
+            x_pos = var.pos().x()
+            # Find existing column or create new one
+            column_key = None
+            for existing_x in columns.keys():
+                if abs(x_pos - existing_x) < 50:  # Same column if within 50px
+                    column_key = existing_x
+                    break
+
+            if column_key is None:
+                column_key = x_pos
+                columns[column_key] = []
+
+            columns[column_key].append(var)
+
+        # Find column with most space or create new column
+        best_column_x = MARGIN
+        best_y = MARGIN
+
+        if columns:
+            # Try to add to existing column with space
+            for col_x, col_items in columns.items():
+                col_bottom = max(item.pos().y() + item.boundingRect().height() for item in col_items)
+                col_right = col_x + max(item.boundingRect().width() for item in col_items)
+
+                # Check if we can fit in this column without exceeding canvas width
+                if col_right + H_SPACING < canvas_width - MARGIN:
+                    return QPointF(col_x, col_bottom + V_SPACING)
+
+            # First, try to fill existing columns vertically
+            viewport_height = self.canvas.viewport().height()
+            for col_x, col_items in columns.items():
+                if len(col_items) < 5:  # Max 5 items per column
+                    bottom_y = max(item.pos().y() + item.boundingRect().height() for item in col_items)
+                    if bottom_y + V_SPACING + 50 < viewport_height - MARGIN:  # 50 = estimated item height
+                        return QPointF(col_x, bottom_y + V_SPACING)
+
+            # Create new column only if vertical space is exhausted
+            rightmost_column = max(columns.keys())
+            rightmost_items = columns[rightmost_column]
+            rightmost_width = max(item.boundingRect().width() for item in rightmost_items)
+
+            new_column_x = rightmost_column + rightmost_width + H_SPACING
+
+            # Only create new column if it fits, otherwise stack in existing column
+            if new_column_x + 150 < canvas_width:  # Assume average widget width
+                return QPointF(new_column_x, MARGIN)
+            else:
+                # Stack in the shortest column
+                shortest_column_x = min(columns.keys(),
+                                        key=lambda x: max(item.pos().y() + item.boundingRect().height()
+                                                          for item in columns[x]))
+                shortest_bottom = max(item.pos().y() + item.boundingRect().height()
+                                      for item in columns[shortest_column_x])
+                return QPointF(shortest_column_x, shortest_bottom + V_SPACING)
 
         return QPointF(MARGIN, MARGIN)
+
+    def _get_column_height(self, col_x: float, items: List) -> float:
+        """Get the current height used in a column"""
+        column_items = [item for item in items if abs(item.pos().x() - col_x) < 50]
+        if not column_items:
+            return 0
+        return max(item.pos().y() + item.boundingRect().height() for item in column_items)
 
     def _predict_print_position(self, existing_items) -> QPointF:
         """Predict position for print blocks"""
@@ -774,7 +841,14 @@ class SmartVariableWidget(GraphicsObjectWidget):
         super().__init__(parent)
         self.name = name
         self.value = value
-        self.width = 160
+
+        # Calculate dynamic width based on content
+        font_metrics = QFontMetrics(QFont(FONT_FAMILY, 10))
+        name_width = font_metrics.width(self.name)
+        value_width = font_metrics.width(str(self.value))
+        content_width = max(name_width, value_width)
+
+        self.width = max(120, content_width + 30)  # Minimum 120, but expand as needed
         self.height = 50
 
     def boundingRect(self) -> QRectF:
@@ -826,11 +900,12 @@ class SmartPrintBlock(GraphicsObjectWidget):
         super().__init__(parent)
         self.expression = expression
         self.value = value
-        # Make width dynamic based on text length
+
+        # More accurate width calculation
         font_metrics = QFontMetrics(QFont(FONT_FAMILY, 9))
         text = f'{self.expression} -> {self.value}'
         text_width = font_metrics.width(text)
-        self.width = max(200, text_width + 40)
+        self.width = max(150, text_width + 30)  # Reduced minimum from 200
         self.height = 40
 
     def boundingRect(self) -> QRectF:
@@ -924,7 +999,7 @@ class DynamicCanvas(QGraphicsView):
         self.layout_predictor = LayoutPredictor(self)
 
     def add_item(self, item: QGraphicsItem, item_type: Optional[str] = None):
-        """Adds a new widget to the canvas with animation."""
+        """Adds a new widget to the canvas with animation and proper sizing."""
         if not item_type:
             if isinstance(item, SmartVariableWidget):
                 item_type = 'variable'
@@ -936,11 +1011,91 @@ class DynamicCanvas(QGraphicsView):
                 item_type = 'generic'
 
         predicted_pos = self.layout_predictor.predict_next_position(item_type)
+        # Ensure position is within viewport bounds
+        viewport_width = self.viewport().width()
+        viewport_height = self.viewport().height()
+        if predicted_pos.x() + 150 > viewport_width - MARGIN:  # 150 = estimated item width
+            predicted_pos.setX(MARGIN)
+            # Find next available Y position
+            if self.items:
+                max_y = max(
+                    item.pos().y() + item.boundingRect().height() for item in self.items if hasattr(item, 'pos'))
+                predicted_pos.setY(max_y + V_SPACING)
         item.setPos(predicted_pos)
+        QTimer.singleShot(50, self.ensure_positive_positions)
         self.scene.addItem(item)
         self.items.append(item)
+
+        # Auto-resize canvas after adding item
+        QTimer.singleShot(100, self._auto_resize_canvas)
+
         if hasattr(item, 'show_animated'):
             item.show_animated(delay=len(self.items) * 20)
+
+    def _auto_resize_canvas(self):
+        """Automatically resize canvas based on content"""
+        if not self.items:
+            return
+
+        # Calculate required canvas size
+        max_right = 0
+        max_bottom = 0
+
+        for item in self.items:
+            if hasattr(item, 'pos') and hasattr(item, 'boundingRect'):
+                item_right = item.pos().x() + item.boundingRect().width()
+                item_bottom = item.pos().y() + item.boundingRect().height()
+                max_right = max(max_right, item_right)
+                max_bottom = max(max_bottom, item_bottom)
+
+        # Add margins
+        required_width = max_right + MARGIN
+        required_height = max_bottom + MARGIN
+
+        # Get current viewport size
+        viewport_width = self.viewport().width()
+        viewport_height = self.viewport().height()
+        # Calculate current space utilization
+        total_viewport_area = viewport_width * viewport_height
+        used_area = 0
+        for item in self.items:
+            used_area += item.boundingRect().width() * item.boundingRect().height()
+        space_utilization = used_area / total_viewport_area if total_viewport_area > 0 else 0
+
+        # Only expand scene if content doesn't fit in viewport
+        # Only expand if space utilization is high OR content exceeds viewport
+        if space_utilization > 0.6 or required_width > viewport_width or required_height > viewport_height:
+            scene_width = max(viewport_width, required_width)
+            scene_height = max(viewport_height, required_height)
+        else:
+            # Keep current viewport size, don't expand unnecessarily
+            scene_width = viewport_width
+            scene_height = viewport_height
+
+        # Update scene rect
+        self.scene.setSceneRect(0, 0, scene_width, scene_height)
+
+    def ensure_positive_positions(self):
+        """Ensure no items have negative positions"""
+        min_x = float('inf')
+        min_y = float('inf')
+
+        for item in self.items:
+            if hasattr(item, 'pos'):
+                min_x = min(min_x, item.pos().x())
+                min_y = min(min_y, item.pos().y())
+
+        # If any items are at negative positions, shift everything
+        if min_x < MARGIN or min_y < MARGIN:
+            offset_x = max(0, MARGIN - min_x)
+            offset_y = max(0, MARGIN - min_y)
+
+            for item in self.items:
+                if hasattr(item, 'pos'):
+                    current_pos = item.pos()
+                    item.setPos(current_pos.x() + offset_x, current_pos.y() + offset_y)
+
+
 
     def add_connection(self, item1, item2):
         # A simple connection implementation if needed
