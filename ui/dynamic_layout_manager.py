@@ -1,24 +1,39 @@
-# /ui/enhanced_dynamic_layout_manager.py
-
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
+
 from typing import Any, List, Dict, Optional, Tuple
 import math
 import random
 import time
 
-# UI Constants
-FONT_FAMILY, ANIMATION_DURATION = "Fira Code", 600
+# --- User-configurable Theme ---
+USER_THEME = {
+    "font_family": "Fira Code",
+    "font_size": 12,
+    "color_high_contrast": False,
+}
+def get_theme_color(name):
+    if USER_THEME.get("color_high_contrast"):
+        colors = {
+            "background": QColor("#0a0a0a"),
+            "highlight": QColor("#ffff00"),
+        }
+        return colors.get(name, QColor("#ffffff"))
+    else:
+        colors = {
+            "background": QColor("#282a36"),
+            "highlight": QColor("#50fa7b"),
+        }
+        return colors.get(name, QColor("#ffffff"))
+
+# --- Constants ---
+FONT_FAMILY, ANIMATION_DURATION = USER_THEME["font_family"], 600
 GLOW_COLOR, PINK_COLOR, LINE_COLOR = QColor("#50fa7b"), QColor("#ff79c6"), QColor("#bd93f9")
-WALL_COLOR, SCOPE_COLOR, BACKGROUND_COLOR = QColor("#44475a"), QColor("#f1fa8c"), QColor("#282a36")
+WALL_COLOR, SCOPE_COLOR, BACKGROUND_COLOR = QColor("#44475a"), QColor("#f1fa8c"), get_theme_color("background")
 GRID_COLOR = QColor("#343746")
 MARGIN, H_SPACING, V_SPACING = 25, 20, 20
 MIN_CANVAS_WIDTH, MIN_CANVAS_HEIGHT = 400, 450
-WALL_THICKNESS, EXPANSION_PADDING = 3, 80
-BOUNCE_INTENSITY, SPRING_TENSION, HOVER_SCALE, PULSE_INTENSITY = 0.15, 0.8, 1.05, 1.15
-CONNECTION_CLEARANCE, CONNECTION_PADDING, MIN_SEGMENT_LENGTH = 15, 8, 20
-
 
 class SpringPhysics:
     """Physics-based spring system for natural animations"""
@@ -836,62 +851,57 @@ class GraphicsObjectWidget(QGraphicsObject):
 
 class SmartVariableWidget(GraphicsObjectWidget):
     """A widget to represent a variable with its name and value"""
-
     def __init__(self, name: str, value: Any, parent=None):
         super().__init__(parent)
         self.name = name
         self.value = value
+        self._font = QFont(FONT_FAMILY, 10)
+        self._update_size()
 
-        # Calculate dynamic width based on content
-        font_metrics = QFontMetrics(QFont(FONT_FAMILY, 10))
+    def _update_size(self):
+        font_metrics = QFontMetrics(self._font)
         name_width = font_metrics.width(self.name)
         value_width = font_metrics.width(str(self.value))
         content_width = max(name_width, value_width)
-
-        self.width = max(120, content_width + 30)  # Minimum 120, but expand as needed
-        self.height = 50
+        # Reduced margin and min-width
+        self.width = max(50, content_width + 24)  # shrinks more for short vars
+        self.height = 40
 
     def boundingRect(self) -> QRectF:
         return QRectF(0, 0, self.width, self.height)
 
     def paint(self, painter: QPainter, option, widget=None):
         painter.setRenderHint(QPainter.Antialiasing)
-
-        # Draw background
         path = QPainterPath()
         path.addRoundedRect(self.boundingRect(), 8, 8)
         painter.fillPath(path, QBrush(WALL_COLOR))
-
-        # Draw text
         painter.setPen(PINK_COLOR)
         font = QFont(FONT_FAMILY, 10, QFont.Bold)
         painter.setFont(font)
         painter.drawText(QRectF(10, 5, self.width - 20, 20), Qt.AlignLeft, self.name)
-
         painter.setPen(GLOW_COLOR)
         font.setBold(False)
         painter.setFont(font)
-        painter.drawText(QRectF(10, 25, self.width - 20, 20), Qt.AlignLeft, str(self.value))
+        painter.drawText(QRectF(10, 22, self.width - 20, 20), Qt.AlignLeft, str(self.value))
 
     def update_value(self, new_value: Any):
-        """Updates the value of the variable and animates the change."""
         if self.value == new_value:
             return
-
         self.value = new_value
-
+        self._update_size()
         # Animate the update
-        self.setScale(PULSE_INTENSITY)
+        self.setScale(1.15)
         anim = SmoothAnimation(self, b'scale')
-        anim.setStartValue(PULSE_INTENSITY)
+        anim.setStartValue(1.15)
         anim.setEndValue(1.0)
         anim.setDuration(400)
         anim.setEasingCurve(QEasingCurve.OutBounce)
         anim.start()
-
-        # Trigger a repaint to show the new text
+        self.prepareGeometryChange()
         self.update()
-
+        if self.parentItem() and hasattr(self.parentItem(), "_update_layout"):
+            self.parentItem()._update_layout()
+HOVER_SCALE = 1.05
 
 class SmartPrintBlock(GraphicsObjectWidget):
     """A widget to represent a print statement output"""
@@ -984,8 +994,7 @@ class ScopeWidget(GraphicsObjectWidget):
 
 
 class DynamicCanvas(QGraphicsView):
-    """The main canvas managing the scene, items, and interactions"""
-
+    """The main canvas managing the scene, items, and interactions, now with dynamic rearrangement & adaptivity."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.items = []
@@ -997,9 +1006,27 @@ class DynamicCanvas(QGraphicsView):
         self.setBackgroundBrush(BACKGROUND_COLOR)
         self.setMinimumSize(MIN_CANVAS_WIDTH, MIN_CANVAS_HEIGHT)
         self.layout_predictor = LayoutPredictor(self)
+        self._install_resize_handler()
+
+    def _install_resize_handler(self):
+        """Make the canvas adapt when its window or parent resizes."""
+        self.viewport().installEventFilter(self)
+        if hasattr(self.parent(), "resizeEvent"):
+            parent_resize = self.parent().resizeEvent
+            def new_resizeEvent(event):
+                self._auto_resize_canvas()
+                parent_resize(event)
+            self.parent().resizeEvent = new_resizeEvent
+
+    def eventFilter(self, obj, event):
+        """Auto-resize scene on viewport resize."""
+        if obj == self.viewport() and event.type() == QEvent.Resize:
+            self._auto_resize_canvas()
+        return super().eventFilter(obj, event)
 
     def add_item(self, item: QGraphicsItem, item_type: Optional[str] = None):
         """Adds a new widget to the canvas with animation and proper sizing."""
+        # Predict position as before
         if not item_type:
             if isinstance(item, SmartVariableWidget):
                 item_type = 'variable'
@@ -1011,90 +1038,131 @@ class DynamicCanvas(QGraphicsView):
                 item_type = 'generic'
 
         predicted_pos = self.layout_predictor.predict_next_position(item_type)
-        # Ensure position is within viewport bounds
         viewport_width = self.viewport().width()
         viewport_height = self.viewport().height()
-        if predicted_pos.x() + 150 > viewport_width - MARGIN:  # 150 = estimated item width
+
+        if predicted_pos.x() + 150 > viewport_width - MARGIN:
             predicted_pos.setX(MARGIN)
-            # Find next available Y position
-            if self.items:
-                max_y = max(
-                    item.pos().y() + item.boundingRect().height() for item in self.items if hasattr(item, 'pos'))
-                predicted_pos.setY(max_y + V_SPACING)
+
+        if self.items:
+            max_y = max(
+                item.pos().y() + item.boundingRect().height() for item in self.items if hasattr(item, 'pos'))
+            predicted_pos.setY(max_y + V_SPACING)
+
         item.setPos(predicted_pos)
         QTimer.singleShot(50, self.ensure_positive_positions)
         self.scene.addItem(item)
         self.items.append(item)
 
-        # Auto-resize canvas after adding item
         QTimer.singleShot(100, self._auto_resize_canvas)
-
         if hasattr(item, 'show_animated'):
             item.show_animated(delay=len(self.items) * 20)
 
-    def _auto_resize_canvas(self):
-        """Automatically resize canvas based on content"""
+        # Rearrange after bulk operations or if items could overlap
+        if len(self.items) >= 20 or self._needs_rearrangement():
+            self.rearrange_all()
+
+    def rearrange_all(self):
+        """Rearrange widgets to avoid overlap using a simple grid layout."""
         if not self.items:
             return
+        grid_w = int(math.sqrt(len(self.items))) + 1
+        grid_spacing_x, grid_spacing_y = 170, 80
+        for i, item in enumerate(self.items):
+            grid_x = i % grid_w
+            grid_y = i // grid_w
+            target_x = MARGIN + grid_x * grid_spacing_x
+            target_y = MARGIN + grid_y * grid_spacing_y
+            if hasattr(item, 'move_to_position'):
+                item.move_to_position(QPointF(target_x, target_y))
+            else:
+                item.setPos(target_x, target_y)
+        self._auto_resize_canvas()
 
-        # Calculate required canvas size
+    def _needs_rearrangement(self):
+        """Detect if widgets overlap/clutter (simple bounding check)."""
+        for i, it1 in enumerate(self.items):
+            rect1 = it1.sceneBoundingRect().adjusted(-5, -5, 5, 5)
+            for j, it2 in enumerate(self.items):
+                if i != j:
+                    rect2 = it2.sceneBoundingRect()
+                    if rect1.intersects(rect2):
+                        return True
+        return False
+
+    def _auto_resize_canvas(self):
+        """Automatically resize canvas based on content and viewport."""
+        if not self.items:
+            return
         max_right = 0
         max_bottom = 0
-
         for item in self.items:
             if hasattr(item, 'pos') and hasattr(item, 'boundingRect'):
                 item_right = item.pos().x() + item.boundingRect().width()
                 item_bottom = item.pos().y() + item.boundingRect().height()
                 max_right = max(max_right, item_right)
                 max_bottom = max(max_bottom, item_bottom)
-
-        # Add margins
-        required_width = max_right + MARGIN
-        required_height = max_bottom + MARGIN
-
-        # Get current viewport size
+        required_width = max(max_right + MARGIN, MIN_CANVAS_WIDTH)
+        required_height = max(max_bottom + MARGIN, MIN_CANVAS_HEIGHT)
         viewport_width = self.viewport().width()
         viewport_height = self.viewport().height()
-        # Calculate current space utilization
-        total_viewport_area = viewport_width * viewport_height
-        used_area = 0
-        for item in self.items:
-            used_area += item.boundingRect().width() * item.boundingRect().height()
-        space_utilization = used_area / total_viewport_area if total_viewport_area > 0 else 0
-
-        # Only expand scene if content doesn't fit in viewport
-        # Only expand if space utilization is high OR content exceeds viewport
-        if space_utilization > 0.6 or required_width > viewport_width or required_height > viewport_height:
-            scene_width = max(viewport_width, required_width)
-            scene_height = max(viewport_height, required_height)
-        else:
-            # Keep current viewport size, don't expand unnecessarily
-            scene_width = viewport_width
-            scene_height = viewport_height
-
-        # Update scene rect
+        scene_width = max(viewport_width, required_width)
+        scene_height = max(viewport_height, required_height)
         self.scene.setSceneRect(0, 0, scene_width, scene_height)
 
     def ensure_positive_positions(self):
-        """Ensure no items have negative positions"""
+        """Ensure no items have negative positions."""
         min_x = float('inf')
         min_y = float('inf')
-
         for item in self.items:
             if hasattr(item, 'pos'):
                 min_x = min(min_x, item.pos().x())
                 min_y = min(min_y, item.pos().y())
-
-        # If any items are at negative positions, shift everything
+        # Shift everything into visible area if any at negative positions
         if min_x < MARGIN or min_y < MARGIN:
             offset_x = max(0, MARGIN - min_x)
             offset_y = max(0, MARGIN - min_y)
-
             for item in self.items:
                 if hasattr(item, 'pos'):
-                    current_pos = item.pos()
-                    item.setPos(current_pos.x() + offset_x, current_pos.y() + offset_y)
+                    cp = item.pos()
+                    item.setPos(cp.x() + offset_x, cp.y() + offset_y)
 
+    def add_connection(self, item1, item2):
+        # [Your connection logic; unchanged]
+        pass
+
+    def clear_all(self):
+        self.scene.clear()
+        self.items.clear()
+        self.connections.clear()
+
+    # --- Accessibility: Keyboard Shortcuts ---
+    def keyPressEvent(self, event):
+        """Keyboard scaling and navigation for accessibility."""
+        if event.key() == Qt.Key_Plus:
+            self.scale(1.1, 1.1)
+        elif event.key() == Qt.Key_Minus:
+            self.scale(0.9, 0.9)
+        elif event.key() == Qt.Key_Tab:
+            # Focus next widget (simple focus, optional: highlight it)
+            self._focus_next_item()
+        elif event.key() == Qt.Key_H:
+            USER_THEME["color_high_contrast"] = not USER_THEME["color_high_contrast"]
+            self.setBackgroundBrush(get_theme_color("background"))
+            self.viewport().update()
+        else:
+            super().keyPressEvent(event)
+
+    def _focus_next_item(self):
+        if not self.items:
+            return
+        # Find current focus
+        focused = [i for i, item in enumerate(self.items) if item.hasFocus()]
+        next_idx = 0
+        if focused:
+            next_idx = (focused[0] + 1) % len(self.items)
+        self.items[next_idx].setFocus()
+        self.items[next_idx].update()
 
 
     def add_connection(self, item1, item2):

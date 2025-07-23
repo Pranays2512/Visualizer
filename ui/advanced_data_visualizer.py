@@ -28,228 +28,53 @@ HIGHLIGHT_ANIMATION_COLOR = QColor("#50fa7b")
 
 
 class ArrayWidget(GraphicsObjectWidget):
-    """Visualizes arrays and lists with individual cell animations"""
-
-    def __init__(self, name: str, array_data: List[Any], parent=None):
-        super().__init__(parent)
-        self.name = name
-        self.array_data = array_data.copy() if array_data else []
-        self.cell_widgets = []
-        self.index_labels = []
-        self._width = 0
-        self._height = 0
-
-        self.name_text = QGraphicsTextItem(f"{self.name}[]", self)
-        self.name_text.setFont(QFont(FONT_FAMILY, 11, QFont.Bold))
-        self.name_text.setDefaultTextColor(QColor("#8be9fd"))
-
-        self._create_cells()
-        self._update_layout()
-
-    def _create_cells(self):
-        # Clear existing cells
-        for cell in self.cell_widgets:
-            if cell.scene():
-                cell.scene().removeItem(cell)
-        for label in self.index_labels:
-            if label.scene():
-                label.scene().removeItem(label)
-
-        self.cell_widgets.clear()
-        self.index_labels.clear()
-
-        # Create new cells
-        for i, value in enumerate(self.array_data):
-            cell = ArrayCellWidget(i, value, self)
-            self.cell_widgets.append(cell)
-
-            # Create index label
-            index_label = QGraphicsTextItem(str(i), self)
-            index_label.setFont(QFont(FONT_FAMILY, 8))
-            index_label.setDefaultTextColor(QColor("#6272a4"))
-            self.index_labels.append(index_label)
-
     def _update_layout(self):
         self.prepareGeometryChange()
-
-        # Position name
         self.name_text.setPos(10, 5)
         name_height = self.name_text.boundingRect().height()
-
-        # Position cells horizontally
         start_x = 10
         start_y = name_height + 15
-
-        for i, (cell, label) in enumerate(zip(self.cell_widgets, self.index_labels)):
-            x = start_x + i * (ARRAY_CELL_WIDTH + 2)
-            cell.setPos(x, start_y)
-
-            # Position index label below cell
-            label_x = x + (ARRAY_CELL_WIDTH - label.boundingRect().width()) / 2
-            label.setPos(label_x, start_y + ARRAY_CELL_HEIGHT + 5)
-
-        # Update widget dimensions
-        if self.array_data:
-            self._width = start_x + len(self.array_data) * (ARRAY_CELL_WIDTH + 2) + 10
-        else:
-            self._width = 120
-        self._height = start_y + ARRAY_CELL_HEIGHT + 25
-
-    def boundingRect(self):
-        return QRectF(0, 0, self._width, self._height)
-
-    def paint(self, painter, option, widget=None):
-        painter.setRenderHint(QPainter.Antialiasing)
-        rect = self.boundingRect()
-
-        # Background
-        gradient = QLinearGradient(0, 0, 0, rect.height())
-        gradient.setColorAt(0, QColor(68, 71, 90, 200))
-        gradient.setColorAt(1, QColor(50, 53, 72, 200))
-
-        path = QPainterPath()
-        path.addRoundedRect(rect, 8, 8)
-        painter.fillPath(path, QBrush(gradient))
-
-        # Border
-        border_color = LINE_COLOR.lighter(120) if self.is_hovering else LINE_COLOR
-        painter.setPen(QPen(border_color, 1.5))
-        painter.drawPath(path)
-
-    def update_array(self, new_data: List[Any]):
-        """Update array data with animation"""
-        if new_data == self.array_data:
-            return
-
-        old_length = len(self.array_data)
-        self.array_data = new_data.copy()
-        new_length = len(self.array_data)
-
-        # Animate changes
-        if new_length > old_length:
-            # Array grew - add new cells
-            self._create_cells()
-            self._update_layout()
-            # Animate new cells
-            for i in range(old_length, new_length):
-                if i < len(self.cell_widgets):
-                    self.cell_widgets[i].show_animated(delay=i * 50)
-        elif new_length < old_length:
-            # Array shrunk - remove cells
-            for i in range(new_length, old_length):
-                if i < len(self.cell_widgets):
-                    self.cell_widgets[i].remove_animated()
-            self._create_cells()
-            self._update_layout()
-        else:
-            # Same size - update existing cells
-            for i, (cell, new_value) in enumerate(zip(self.cell_widgets, new_data)):
-                cell.update_value(new_value)
-
-    def highlight_index(self, index: int, color: QColor = HIGHLIGHT_ANIMATION_COLOR):
-        """Highlight a specific array index"""
-        if 0 <= index < len(self.cell_widgets):
-            self.cell_widgets[index].highlight(color)
-
-    def get_cell_widget(self, index: int) -> Optional['ArrayCellWidget']:
-        """Get the widget for a specific array index"""
-        if 0 <= index < len(self.cell_widgets):
-            return self.cell_widgets[index]
-        return None
-
+        font_metrics = QFontMetrics(QFont(FONT_FAMILY, 10))
+        content_widths = [
+             max(30, font_metrics.width(str(cell.value)) + 18)
+             for cell in self.cell_widgets
+        ]
+        running_x = start_x
+        for i, (cell, label, w) in zip(
+                range(len(self.cell_widgets)), self.cell_widgets, self.index_labels, content_widths):
+            cell.set_custom_width(w)
+            cell.setPos(running_x, start_y)
+            label_x = running_x + (w - label.boundingRect().width()) / 2
+            label.setPos(label_x, start_y + cell._height + 5)
+            running_x += w + 2
+        self._width = running_x + 10 if self.cell_widgets else 80
+        self._height = start_y + 35 + 25
 
 class ArrayCellWidget(GraphicsObjectWidget):
-    """Individual cell in an array visualization"""
-
     def __init__(self, index: int, value: Any, parent=None):
         super().__init__(parent)
         self.index = index
         self.value = value
-
+        self._width = 0
+        self._height = 35
         self.value_text = QGraphicsTextItem(str(value), self)
         self.value_text.setFont(QFont(FONT_FAMILY, 10, QFont.Bold))
         self.value_text.setDefaultTextColor(QColor("white"))
+        self.set_custom_width(30)
 
+    def set_custom_width(self, width):
+        self._width = max(30, width)
         self._update_text_position()
-
-        # Highlight animation
-        self.highlight_animation = SmoothAnimation(self, b'scale')
-        self.highlight_animation.setDuration(300)
 
     def _update_text_position(self):
         text_rect = self.value_text.boundingRect()
-        x = (ARRAY_CELL_WIDTH - text_rect.width()) / 2
-        y = (ARRAY_CELL_HEIGHT - text_rect.height()) / 2
+        x = (self._width - text_rect.width()) / 2
+        y = (self._height - text_rect.height()) / 2
         self.value_text.setPos(x, y)
 
     def boundingRect(self):
-        return QRectF(0, 0, ARRAY_CELL_WIDTH, ARRAY_CELL_HEIGHT)
+        return QRectF(0, 0, self._width, self._height)
 
-    def paint(self, painter, option, widget=None):
-        painter.setRenderHint(QPainter.Antialiasing)
-        rect = self.boundingRect()
-
-        # Cell background
-        color = self._get_value_color(self.value)
-        painter.setBrush(color)
-        painter.setPen(QPen(QColor("white"), 1))
-        painter.drawRoundedRect(rect, 4, 4)
-
-    def _get_value_color(self, value):
-        """Get color based on value type"""
-        if isinstance(value, int):
-            return QColor("#f1fa8c").darker(130)
-        elif isinstance(value, float):
-            return QColor("#ffb86c").darker(130)
-        elif isinstance(value, str):
-            return QColor("#50fa7b").darker(130)
-        elif isinstance(value, bool):
-            return QColor("#ff79c6").darker(130)
-        else:
-            return QColor("#6272a4")
-
-    def update_value(self, new_value: Any):
-        """Update cell value with animation"""
-        if self.value == new_value:
-            return
-
-        self.value = new_value
-        self.value_text.setPlainText(str(new_value))
-        self._update_text_position()
-
-        # Pulse animation
-        self.setScale(1.2)
-        scale_anim = SmoothAnimation(self, b'scale')
-        scale_anim.setStartValue(1.2)
-        scale_anim.setEndValue(1.0)
-        scale_anim.setDuration(400)
-        scale_anim.start()
-
-        self.update()
-
-    def highlight(self, color: QColor = HIGHLIGHT_ANIMATION_COLOR):
-        """Highlight this cell briefly"""
-        # Create glow effect
-        glow = QGraphicsDropShadowEffect()
-        glow.setColor(color)
-        glow.setBlurRadius(15)
-        self.setGraphicsEffect(glow)
-
-        # Remove glow after animation
-        QTimer.singleShot(1000, lambda: self.setGraphicsEffect(None))
-
-        # Scale animation
-        self.highlight_animation.setStartValue(1.0)
-        self.highlight_animation.setEndValue(1.3)
-        self.highlight_animation.finished.connect(self._return_to_normal_scale)
-        self.highlight_animation.start()
-
-    def _return_to_normal_scale(self):
-        return_anim = SmoothAnimation(self, b'scale')
-        return_anim.setStartValue(1.3)
-        return_anim.setEndValue(1.0)
-        return_anim.setDuration(200)
-        return_anim.start()
 
 
 class StringWidget(GraphicsObjectWidget):
@@ -271,13 +96,11 @@ class StringWidget(GraphicsObjectWidget):
         self._update_layout()
 
     def _create_char_cells(self):
-        # Clear existing cells
         for cell in self.char_widgets:
             if cell.scene():
                 cell.scene().removeItem(cell)
         self.char_widgets.clear()
 
-        # Create character cells
         for i, char in enumerate(self.string_data):
             cell = StringCharWidget(i, char, self)
             self.char_widgets.append(cell)
@@ -285,11 +108,9 @@ class StringWidget(GraphicsObjectWidget):
     def _update_layout(self):
         self.prepareGeometryChange()
 
-        # Position name
         self.name_text.setPos(10, 5)
         name_height = self.name_text.boundingRect().height()
 
-        # Position character cells
         start_x = 10
         start_y = name_height + 15
 
@@ -297,7 +118,6 @@ class StringWidget(GraphicsObjectWidget):
             x = start_x + i * (STRING_CHAR_WIDTH + 1)
             cell.setPos(x, start_y)
 
-        # Update dimensions
         if self.string_data:
             self._width = start_x + len(self.string_data) * (STRING_CHAR_WIDTH + 1) + 10
         else:

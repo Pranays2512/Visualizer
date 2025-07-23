@@ -1,13 +1,10 @@
-import sys
 import ast
 from typing import Dict, Any, List, Tuple, Union, Optional, Iterator
 from PyQt5.QtWidgets import QTextEdit, QWidget, QMainWindow
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 from PyQt5.QtGui import QTextCursor, QColor, QTextFormat
 
-# Import base UI components
 from .dynamic_layout_manager import DynamicCanvas, SmartVariableWidget, SmartPrintBlock, ScopeWidget
-# Import the new advanced data structure widgets
 from .advanced_data_visualizer import ArrayWidget, StringWidget, DictionaryWidget
 
 HIGHLIGHT_COLOR = QColor("#bd93f9")
