@@ -20,6 +20,8 @@ class FrostedCompiler(QMainWindow):
         self._ui_state = {'merged': False, 'input_faded': False}
         self.initUI()
 
+
+
     def initUI(self):
         self.setWindowTitle("Frosted Glass Python Compiler")
         self.resize(1200, 700)
@@ -227,7 +229,7 @@ class FrostedCompiler(QMainWindow):
 
     def visualize_code(self):
         self._switch_to_visualize_view()
-        self.visualizer.start()
+        self.visualizer.start()  # This will now automatically detect if/else
 
     def run_code(self):
         self._switch_to_standard_view()

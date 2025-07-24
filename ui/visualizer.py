@@ -1,4 +1,5 @@
 import ast
+import os
 from typing import Dict, Any, List, Tuple, Union, Optional, Iterator
 from PyQt5.QtWidgets import QTextEdit, QWidget, QMainWindow
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
@@ -51,6 +52,8 @@ class UIVisualizer(QObject):
         self.step_timer.timeout.connect(self._next_step)
         self.extra_selections: List[QTextEdit.ExtraSelection] = []
 
+    # Add this method to UIVisualizer class:
+
     def start(self):
         """
         Starts the visualization. Clears the previous state, parses the code,
@@ -86,7 +89,66 @@ class UIVisualizer(QObject):
             self.is_running = False
             return
 
+        # REMOVE the control flow detection - always use step-by-step
         QTimer.singleShot(200, self._next_step)
+    def execute_and_track(self, code):
+        """Execute code and track which branches are taken"""
+        import tempfile
+        import subprocess
+        import sys
+
+        # Insert tracking code
+        tracked_code = self.insert_tracking_code(code)
+
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.py', delete=False, mode='w') as f:
+                f.write(tracked_code)
+                temp_file = f.name
+
+            result = subprocess.run([sys.executable, temp_file],
+                                    capture_output=True, text=True, timeout=5)
+
+            # Parse tracking output to determine which branches were taken
+            return self.parse_execution_path(result.stdout)
+
+        except Exception as e:
+            print(f"Execution error: {e}")
+            return {}
+        finally:
+            os.unlink(temp_file)
+
+    def insert_tracking_code(self, code):
+        """Insert print statements to track execution path"""
+        # This is a simplified version - you'd need more sophisticated tracking
+        lines = code.split('\n')
+        tracked_lines = []
+
+        for i, line in enumerate(lines):
+            if 'if ' in line and ':' in line:
+                tracked_lines.append(f"print('CONDITION_LINE_{i}')")
+                tracked_lines.append(line)
+            elif line.strip().startswith('print('):
+                tracked_lines.append(f"print('EXECUTING_LINE_{i}')")
+                tracked_lines.append(line)
+            else:
+                tracked_lines.append(line)
+
+        return '\n'.join(tracked_lines)
+
+
+    def parse_execution_path(self, output):
+        """Parse the tracking output to determine execution path"""
+        # Simple implementation - you can enhance this
+        lines = output.split('\n')
+        execution_info = {}
+
+        for line in lines:
+            if 'CONDITION_LINE_' in line:
+                execution_info['condition_executed'] = True
+            elif 'EXECUTING_LINE_' in line:
+                execution_info['branch_taken'] = line
+
+        return execution_info
 
     def pause(self):
         if self.is_running and not self.is_paused:
@@ -151,30 +213,106 @@ class UIVisualizer(QObject):
                 value = self._evaluate_expression(node.value) if node.value else None
                 self._handle_return(value)
             elif isinstance(node, ast.If):
+                # First create a condition variable to show what's being evaluated
+                try:
+                    condition_text = self.code_editor.document().findBlockByLineNumber(node.lineno - 1).text().strip()
+                    condition_text = condition_text.replace('if ', '').replace(':', '')
+                except:
+                    condition_text = "condition"
+
                 test_result = self._evaluate_expression(node.test)
+
+                # Create condition widget showing the result
+                condition_widget = SmartVariableWidget(f"if {condition_text}", str(test_result))
+                self.canvas.add_item(condition_widget)
+
+                # Then execute the appropriate branch
                 body_to_execute = node.body if test_result else node.orelse
                 current_frame.nodes[current_frame.ip + 1:current_frame.ip + 1] = body_to_execute
                 current_frame.ip += 1
             elif isinstance(node, ast.While):
-                if self._evaluate_expression(node.test):
-                    nodes_to_inject = node.body + [node]
-                    current_frame.nodes[current_frame.ip + 1:current_frame.ip + 1] = nodes_to_inject
+                loop_id = id(node)
+
+                # Check condition first
+                test_result = self._evaluate_expression(node.test)
+
+                if loop_id not in current_frame.iterators:
+                    # First time encountering this loop
+                    try:
+                        condition_text = self.code_editor.document().findBlockByLineNumber(
+                            node.lineno - 1).text().strip()
+                        condition_text = condition_text.replace('while ', '').replace(':', '')
+                    except:
+                        condition_text = "condition"
+
+                    loop_widget = SmartVariableWidget(f"while {condition_text}", f"condition: {test_result}")
+                    self.canvas.add_item(loop_widget)
+                    current_frame.iterators[loop_id] = {'widget': loop_widget, 'iteration': 0}
+
+                loop_info = current_frame.iterators[loop_id]
+
+                if test_result:
+                    # Loop continues - inject body and then this loop node again
+                    loop_info['iteration'] += 1
+                    loop_info['widget'].update_value(f"Iteration {loop_info['iteration']}: {test_result}")
+
+                    # Insert body + loop node back into execution
+                    current_frame.nodes[current_frame.ip + 1:current_frame.ip + 1] = node.body + [node]
+                else:
+                    # Loop finished
+                    loop_info['widget'].update_value(f"Loop finished: {test_result}")
+                    del current_frame.iterators[loop_id]
+
                 current_frame.ip += 1
+
             elif isinstance(node, ast.For):
                 loop_id = id(node)
+
                 if loop_id not in current_frame.iterators:
+                    # Initialize for loop
+                    try:
+                        loop_text = self.code_editor.document().findBlockByLineNumber(node.lineno - 1).text().strip()
+                        loop_text = loop_text.replace(':', '')
+                    except:
+                        loop_text = f"for {node.target.id} in iterable"
+
                     iterable = self._evaluate_expression(node.iter)
-                    current_frame.iterators[loop_id] = iter(iterable)
+                    iterator = iter(iterable)
+
+                    loop_widget = SmartVariableWidget(loop_text,
+                                                      f"iterating over {len(list(iterable)) if hasattr(iterable, '__len__') else '?'} items")
+                    self.canvas.add_item(loop_widget)
+
+                    current_frame.iterators[loop_id] = {
+                        'iterator': iterator,
+                        'widget': loop_widget,
+                        'iteration': 0,
+                        'iterable': iterable
+                    }
+
+                loop_info = current_frame.iterators[loop_id]
+
                 try:
-                    item_val = next(current_frame.iterators[loop_id])
-                    assign_node = ast.Assign(targets=[node.target], value=ast.Constant(value=item_val, kind=None))
-                    ast.copy_location(assign_node, node)
-                    nodes_to_inject = [assign_node] + node.body + [node]
-                    current_frame.nodes[current_frame.ip + 1:current_frame.ip + 1] = nodes_to_inject
+                    # Get next item
+                    item_val = next(loop_info['iterator'])
+                    loop_info['iteration'] += 1
+
+                    # Update loop variable in current frame
+                    current_frame.locals[node.target.id] = item_val
+                    self._update_variable(node.target.id, item_val)
+
+                    # Update loop widget
+                    loop_info['widget'].update_value(
+                        f"Iteration {loop_info['iteration']}: {node.target.id} = {item_val}")
+
+                    # Inject body + this loop node back for next iteration
+                    current_frame.nodes[current_frame.ip + 1:current_frame.ip + 1] = node.body + [node]
+
                 except StopIteration:
+                    # Loop finished
+                    loop_info['widget'].update_value("Loop completed")
                     del current_frame.iterators[loop_id]
-                current_frame.ip += 1
-            else:
+
                 current_frame.ip += 1
         except Exception as e:
             print(f"Runtime Error on line {getattr(node, 'lineno', '?')}: {e}")
@@ -183,7 +321,6 @@ class UIVisualizer(QObject):
 
         if self.is_running:
             self.step_timer.start(self.speed_interval)
-
     def _execute_assignment(self, node: Union[ast.Assign, ast.AugAssign]):
         value = self._evaluate_expression(node.value)
         if isinstance(node, ast.Assign):
