@@ -1,13 +1,12 @@
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
-
-from typing import Any, List, Dict, Optional, Tuple
 import math
 import random
 import time
+from typing import Any, List, Optional, Tuple
 
-# --- User-configurable Theme ---
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
+from PyQt5.QtWidgets import *
+
 USER_THEME = {
     "font_family": "Courier New",
     "font_size": 12,
@@ -27,7 +26,7 @@ def get_theme_color(name):
         }
         return colors.get(name, QColor("#ffffff"))
 
-# --- Constants ---
+
 FONT_FAMILY, ANIMATION_DURATION = USER_THEME["font_family"], 600
 GLOW_COLOR, PINK_COLOR, LINE_COLOR = QColor("#50fa7b"), QColor("#ff79c6"), QColor("#bd93f9")
 WALL_COLOR, SCOPE_COLOR, BACKGROUND_COLOR = QColor("#44475a"), QColor("#f1fa8c"), get_theme_color("background")
