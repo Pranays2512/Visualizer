@@ -150,176 +150,6 @@ class AnimationContext:
         return int(base_duration * context_multiplier * distance_factor)
 
 
-class ExecutionArrow(QGraphicsObject):
-    def __init__(self, start_item, end_item, label="", parent=None):
-        super().__init__(parent)
-        self.start_item = start_item
-        self.end_item = end_item
-        self.label = label
-        self.arrow_color = QColor("#50fa7b")
-        self.setZValue(10)  # Above other items
-
-        # FIX: Use _dot_progress with underscore
-        self._dot_progress = 0.0
-        self.dot_animation = QPropertyAnimation(self, b"dot_progress")
-        self.dot_animation.setDuration(1000)
-
-    def get_dot_progress(self):
-        return self._dot_progress  # Return the private variable
-
-    def set_dot_progress(self, value):
-        self._dot_progress = value  # Set the private variable
-        self.update()
-
-    dot_progress = pyqtProperty(float, get_dot_progress, set_dot_progress)
-
-    def boundingRect(self):
-        start_center = self.start_item.sceneBoundingRect().center()
-        end_center = self.end_item.sceneBoundingRect().center()
-
-        rect = QRectF(start_center, end_center).normalized()
-        return rect.adjusted(-20, -20, 20, 20)
-
-    def paint(self, painter, option, widget=None):
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        # Get connection points
-        start_rect = self.start_item.sceneBoundingRect()
-        end_rect = self.end_item.sceneBoundingRect()
-
-        start_center = start_rect.center()
-        end_center = end_rect.center()
-
-        # Calculate connection points on edges
-        start_point = self._get_edge_point(start_rect, end_center)
-        end_point = self._get_edge_point(end_rect, start_center)
-
-        # Draw arrow line
-        painter.setPen(QPen(self.arrow_color, 2))
-        painter.drawLine(start_point, end_point)
-
-        # Draw arrowhead
-        self._draw_arrowhead(painter, start_point, end_point)
-
-        # Draw moving dot if animating
-        if self.dot_progress > 0:
-            self._draw_moving_dot(painter, start_point, end_point)
-
-        # Draw label
-        if self.label:
-            self._draw_label(painter, start_point, end_point)
-
-    def _get_edge_point(self, rect, target):
-        """Get point on rectangle edge closest to target"""
-        center = rect.center()
-
-        # Calculate which edge to connect to
-        dx = target.x() - center.x()
-        dy = target.y() - center.y()
-
-        if abs(dx) > abs(dy):
-            # Connect to left or right edge
-            if dx > 0:
-                return QPointF(rect.right(), center.y())
-            else:
-                return QPointF(rect.left(), center.y())
-        else:
-            # Connect to top or bottom edge
-            if dy > 0:
-                return QPointF(center.x(), rect.bottom())
-            else:
-                return QPointF(center.x(), rect.top())
-
-    def _draw_arrowhead(self, painter, start, end):
-        """Draw triangle arrowhead at end point"""
-        # Calculate arrow direction
-        dx = end.x() - start.x()
-        dy = end.y() - start.y()
-        length = math.sqrt(dx * dx + dy * dy)
-
-        if length == 0:
-            return
-
-        # Normalize direction
-        ux = dx / length
-        uy = dy / length
-
-        # Arrowhead size
-        head_len = 12
-        head_angle = 0.5
-
-        # Calculate arrowhead points
-        x1 = end.x() - head_len * (ux * math.cos(head_angle) + uy * math.sin(head_angle))
-        y1 = end.y() - head_len * (uy * math.cos(head_angle) - ux * math.sin(head_angle))
-
-        x2 = end.x() - head_len * (ux * math.cos(head_angle) - uy * math.sin(head_angle))
-        y2 = end.y() - head_len * (uy * math.cos(head_angle) + ux * math.sin(head_angle))
-
-        # Draw arrowhead
-        arrowhead = QPolygonF([end, QPointF(x1, y1), QPointF(x2, y2)])
-        painter.setBrush(self.arrow_color)
-        painter.drawPolygon(arrowhead)
-
-    def _draw_moving_dot(self, painter, start, end):
-        """Draw animated dot moving along arrow"""
-        # Calculate current position
-        t = self.dot_progress
-        current_x = start.x() + t * (end.x() - start.x())
-        current_y = start.y() + t * (end.y() - start.y())
-        current_pos = QPointF(current_x, current_y)
-
-        # Draw glowing dot
-        painter.setBrush(QColor("#ffff00"))  # Yellow dot
-        painter.setPen(QPen(QColor("#ffff00"), 2))
-        painter.drawEllipse(current_pos, 6, 6)
-
-    def _draw_label(self, painter, start, end):
-        """Draw label text along the arrow"""
-        mid_x = (start.x() + end.x()) / 2
-        mid_y = (start.y() + end.y()) / 2
-
-        painter.setPen(Qt.white)
-        painter.setFont(QFont(FONT_FAMILY, 8))
-
-        # Draw background for text
-        text_rect = painter.fontMetrics().boundingRect(self.label)
-        text_rect.moveCenter(QPoint(int(mid_x), int(mid_y - 10)))
-
-        painter.fillRect(text_rect.adjusted(-2, -1, 2, 1), QColor("#282a36"))
-        painter.drawText(text_rect, Qt.AlignCenter, self.label)
-
-    def animate_flow(self):
-        """Start the moving dot animation"""
-        self.dot_animation.setStartValue(0.0)
-        self.dot_animation.setEndValue(1.0)
-        self.dot_animation.start()
-
-
-
-class CurvedExecutionArrow(ExecutionArrow):
-    """Curved arrow for loop back connections"""
-
-    def paint(self, painter, option, widget=None):
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        start_center = self.start_item.sceneBoundingRect().center()
-        end_center = self.end_item.sceneBoundingRect().center()
-
-
-        path = QPainterPath()
-        path.moveTo(start_center)
-
-            # Add curve control points (makes an arc)
-        control1 = QPointF(start_center.x() + 50, start_center.y() - 30)
-        control2 = QPointF(end_center.x() + 50, end_center.y() - 30)
-        path.cubicTo(control1, control2, end_center)
-
-
-        painter.setPen(QPen(QColor("#bd93f9"), 2, Qt.DashLine))  # Purple dashed line
-        painter.drawPath(path)
-
-        self._draw_arrowhead(painter, control2, end_center)
-
 
 class ImportanceTracker:
     """Tracks item importance based on interactions for visual hierarchy"""
@@ -375,99 +205,6 @@ class ImportanceTracker:
             # Simple decay approximation
             return max(0.0, last_score * 0.95)
         return 0.0
-
-
-class FlowIndicator(QGraphicsObject):
-    """Animated flow indicator for connection lines"""
-
-    def __init__(self, connection_line, parent=None):
-        super().__init__(parent)
-        self.connection = connection_line
-        self.progress = 0.0
-        self.active = False
-        self.glow_radius = 10
-
-        # Animation for flow
-        self.flow_animation = QPropertyAnimation(self, b"progress")
-        self.flow_animation.setDuration(1500)
-        self.flow_animation.setEasingCurve(QEasingCurve.OutCubic)
-
-        # Pulsing glow animation
-        self.glow_animation = QPropertyAnimation(self, b"glow_radius")
-        self.glow_animation.setDuration(800)
-        self.glow_animation.setStartValue(8)
-        self.glow_animation.setEndValue(15)
-        self.glow_animation.finished.connect(self._reverse_glow)
-
-    def get_progress(self) -> float:
-        return self.progress
-
-    def set_progress(self, value: float):
-        self.progress = value
-        self.update()
-
-    def get_glow_radius(self) -> float:
-        return self.glow_radius
-
-    def set_glow_radius(self, value: float):
-        self.glow_radius = value
-        self.update()
-
-    progress = pyqtProperty(float, get_progress, set_progress)
-    glow_radius = pyqtProperty(float, get_glow_radius, set_glow_radius)
-
-    def animate_flow(self, duration: int = 1500):
-        """Start flow animation"""
-        self.active = True
-        self.flow_animation.setDuration(duration)
-        self.flow_animation.setStartValue(0.0)
-        self.flow_animation.setEndValue(1.0)
-        self.flow_animation.finished.connect(self._on_flow_finished)
-        self.flow_animation.start()
-
-        # Start glow animation
-        self.glow_animation.start()
-
-    def _reverse_glow(self):
-        """Reverse glow animation for pulsing effect"""
-        if self.active:
-            start_val = self.glow_animation.endValue()
-            end_val = self.glow_animation.startValue()
-            self.glow_animation.setStartValue(start_val)
-            self.glow_animation.setEndValue(end_val)
-            self.glow_animation.start()
-
-    def _on_flow_finished(self):
-        """Clean up when flow animation finishes"""
-        self.active = False
-        self.glow_animation.stop()
-        if self.scene():
-            QTimer.singleShot(200, lambda: self.scene().removeItem(self) if self.scene() else None)
-
-    def boundingRect(self) -> QRectF:
-        if not self.connection or not hasattr(self.connection, '_path') or self.connection._path.isEmpty():
-            return QRectF()
-        return self.connection._path.boundingRect().adjusted(-20, -20, 20, 20)
-
-    def paint(self, painter: QPainter, option, widget=None):
-        if not self.active or not self.connection or not hasattr(self.connection,
-                                                                 '_path') or self.connection._path.isEmpty():
-            return
-
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        # Get current position along path
-        point = self.connection._path.pointAtPercent(self.progress)
-
-        # Draw glowing dot
-        glow_effect = QRadialGradient(point, self.glow_radius)
-        glow_effect.setColorAt(0, QColor("#50fa7b", 200))
-        glow_effect.setColorAt(0.5, QColor("#50fa7b", 100))
-        glow_effect.setColorAt(1, QColor("#50fa7b", 0))
-
-        painter.setBrush(glow_effect)
-        painter.setPen(QPen(Qt.NoPen))
-        painter.drawEllipse(point, self.glow_radius, self.glow_radius)
 
 
 class SnapZone(QGraphicsObject):
@@ -1166,7 +903,6 @@ class DynamicCanvas(QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.items = []
-        self.connections = []
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
         self.setRenderHint(QPainter.Antialiasing)
@@ -1200,8 +936,7 @@ class DynamicCanvas(QGraphicsView):
         return super().eventFilter(obj, event)
 
     def add_item(self, item: QGraphicsItem, item_type: Optional[str] = None):
-        """Adds a new widget to the canvas with animation and proper sizing."""
-        # Determine item type
+        """Add item with minimal visual connections"""
         if not item_type:
             if isinstance(item, SmartVariableWidget):
                 item_type = 'variable'
@@ -1209,10 +944,8 @@ class DynamicCanvas(QGraphicsView):
                 item_type = 'print'
             elif isinstance(item, ScopeWidget):
                 item_type = 'scope'
-            else:
-                item_type = 'generic'
 
-        # Better positioning logic
+        # Position item
         if item_type == 'variable':
             predicted_pos = self._get_next_variable_position()
         elif item_type == 'print':
@@ -1225,38 +958,16 @@ class DynamicCanvas(QGraphicsView):
         self.items.append(item)
 
         if hasattr(item, 'show_animated'):
-            item.show_animated(delay=len(self.items) * 50)  # Faster animation
+            item.show_animated(delay=len(self.items) * 30)
+
+        # Only show connection for print statements to their source variable
 
         QTimer.singleShot(200, self._auto_resize_canvas)
-
-        # REMOVE automatic arrow creation for loops
-        # Only show arrows for simple sequential code
-        if len(self.items) <= 10 and self._is_simple_sequence():
-            if len(self.items) > 1:
-                QTimer.singleShot(300, self._show_limited_connections)
-
     def _is_simple_sequence(self):
             """Check if this is simple sequential code (no loops)"""
             # Don't show arrows if we have many items (likely a loop)
             return len(self.items) < 10
 
-    def _show_limited_connections(self):
-            """Show connections only for the last few items"""
-            if len(self.items) >= 2:
-                # Only connect the last 2 items
-                last_item = self.items[-1]
-                prev_item = self.items[-2]
-
-                # Clear old connections first
-                for conn in self.connections[-5:]:  # Keep only last 5 connections
-                    if conn.scene():
-                        self.scene.removeItem(conn)
-                self.connections = self.connections[:-5] if len(self.connections) > 5 else []
-
-                # Add new connection
-                arrow = self.add_connection(prev_item, last_item)
-                QTimer.singleShot(100, lambda: arrow.animate_flow() if arrow.scene() else None)
-                QTimer.singleShot(200, self._auto_resize_canvas)
 
     def _get_next_variable_position(self):
         """Get position for next variable in a clean column"""
@@ -1349,70 +1060,6 @@ class DynamicCanvas(QGraphicsView):
                     cp = item.pos()
                     item.setPos(cp.x() + offset_x, cp.y() + offset_y)
 
-    def add_conditional_connection(self, condition_item, true_item, false_item, condition_result):
-        """Add arrows for if/else branches"""
-        # Clear existing arrows first
-        self.clear_arrows()
-
-        if condition_result:
-            # Show path taken (green arrow)
-            arrow = self.add_connection(condition_item, true_item, "TRUE")
-            arrow.arrow_color = QColor("#50fa7b")  # Green for true path
-
-            # Show path not taken (dimmed red arrow)
-            if false_item:
-                false_arrow = self.add_connection(condition_item, false_item, "FALSE")
-                false_arrow.arrow_color = QColor("#ff5555", 100)  # Dimmed red
-                false_arrow.setOpacity(0.3)
-        else:
-            # Show false path taken
-            if false_item:
-                arrow = self.add_connection(condition_item, false_item, "FALSE")
-                arrow.arrow_color = QColor("#ff5555")  # Red for false path
-
-            # Show true path not taken (dimmed)
-            true_arrow = self.add_connection(condition_item, true_item, "TRUE")
-            true_arrow.arrow_color = QColor("#50fa7b", 100)  # Dimmed green
-            true_arrow.setOpacity(0.3)
-
-    def add_loop_connection(self, loop_item, body_items, iteration_count):
-        """Show loop iteration with curved arrow back"""
-        # Clear existing arrows
-        self.clear_arrows()
-
-        # Arrow from loop to first body item
-        if body_items:
-            self.add_connection(loop_item, body_items[0], f"Iteration {iteration_count}")
-
-            # Arrows between body items
-            for i in range(len(body_items) - 1):
-                self.add_connection(body_items[i], body_items[i + 1])
-
-            # Curved arrow back to loop (if continuing)
-            if iteration_count > 1:
-                back_arrow = CurvedExecutionArrow(body_items[-1], loop_item, "LOOP BACK")
-                self.scene.addItem(back_arrow)
-                self.connections.append(back_arrow)
-
-
-    def set_execution_context(self, context_type, **kwargs):
-        """Set execution context for proper flow visualization"""
-        if context_type == "if_statement":
-            condition_item = kwargs.get('condition_item')
-            true_item = kwargs.get('true_item')
-            false_item = kwargs.get('false_item')
-            result = kwargs.get('condition_result')
-            self.add_conditional_connection(condition_item, true_item, false_item, result)
-
-        elif context_type == "loop":
-            loop_item = kwargs.get('loop_item')
-            body_items = kwargs.get('body_items', [])
-            iteration = kwargs.get('iteration_count', 1)
-            self.add_loop_connection(loop_item, body_items, iteration)
-
-        elif context_type == "sequential":
-            # Regular sequential execution
-            self.show_execution_flow()
 
     # --- Accessibility: Keyboard Shortcuts ---
     def keyPressEvent(self, event):
@@ -1442,40 +1089,15 @@ class DynamicCanvas(QGraphicsView):
         self.items[next_idx].setFocus()
         self.items[next_idx].update()
 
-    def add_connection(self, item1, item2, label=""):
-        """Create and add an arrow between two items"""
-        arrow = ExecutionArrow(item1, item2, label)
-        self.scene.addItem(arrow)
-        self.connections.append(arrow)
-        return arrow
 
-    def show_execution_flow(self):
-        """Connect all items with arrows showing execution order"""
-        # Clear existing arrows
-        for arrow in self.connections:
-            self.scene.removeItem(arrow)
-        self.connections.clear()
 
-        # Add arrows between consecutive items
-        for i in range(len(self.items) - 1):
-            current_item = self.items[i]
-            next_item = self.items[i + 1]
-            arrow = self.add_connection(current_item, next_item, f"Step {i + 1}")
+    def _remove_loop_indicator(self):
+        """Remove loop iteration indicator"""
+        if hasattr(self, '_loop_indicator') and self._loop_indicator.scene():
+            self.scene.removeItem(self._loop_indicator)
 
-    def animate_execution_step(self, step_index):
-        """Animate execution of a specific step"""
-        if step_index < len(self.connections):
-            arrow = self.connections[step_index]
-            arrow.animate_flow()
 
-    def clear_arrows(self):
-        """Remove all arrows from the scene"""
-        for arrow in self.connections:
-            if arrow.scene():
-                self.scene.removeItem(arrow)
-        self.connections.clear()
 
     def clear_all(self):
         self.scene.clear()
         self.items.clear()
-        self.connections.clear()

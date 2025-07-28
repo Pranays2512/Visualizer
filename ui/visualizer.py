@@ -233,87 +233,117 @@ class UIVisualizer(QObject):
             elif isinstance(node, ast.While):
                 loop_id = id(node)
 
-                # Check condition first
+                # Evaluate condition
                 test_result = self._evaluate_expression(node.test)
 
                 if loop_id not in current_frame.iterators:
-                    # First time encountering this loop
+                    # First time - create loop condition widget
                     try:
                         condition_text = self.code_editor.document().findBlockByLineNumber(
                             node.lineno - 1).text().strip()
-                        condition_text = condition_text.replace('while ', '').replace(':', '')
+                        condition_text = condition_text.replace('while ', '').replace(':', '').strip()
                     except:
                         condition_text = "condition"
 
-                    loop_widget = SmartVariableWidget(f"while {condition_text}", f"condition: {test_result}")
+                    loop_widget = SmartVariableWidget(f"while ({condition_text})", str(test_result))
                     self.canvas.add_item(loop_widget)
-                    current_frame.iterators[loop_id] = {'widget': loop_widget, 'iteration': 0}
+
+                    current_frame.iterators[loop_id] = {
+                        'widget': loop_widget,
+                        'iteration': 0,
+                        'condition_text': condition_text
+                    }
 
                 loop_info = current_frame.iterators[loop_id]
 
                 if test_result:
-                    # Loop continues - inject body and then this loop node again
+                    # Continue loop
                     loop_info['iteration'] += 1
-                    loop_info['widget'].update_value(f"Iteration {loop_info['iteration']}: {test_result}")
+                    loop_info['widget'].update_value(f"Iteration {loop_info['iteration']}")
+                    # Don't create arrows for every loop iteration
 
-                    # Insert body + loop node back into execution
+                    # Insert body + loop node back for next iteration
                     current_frame.nodes[current_frame.ip + 1:current_frame.ip + 1] = node.body + [node]
                 else:
-                    # Loop finished
-                    loop_info['widget'].update_value(f"Loop finished: {test_result}")
+                    # Exit loop
+                    loop_info['widget'].update_value("False (loop ended)")
                     del current_frame.iterators[loop_id]
 
                 current_frame.ip += 1
 
+
             elif isinstance(node, ast.For):
                 loop_id = id(node)
-
                 if loop_id not in current_frame.iterators:
                     # Initialize for loop
                     try:
                         loop_text = self.code_editor.document().findBlockByLineNumber(node.lineno - 1).text().strip()
-                        loop_text = loop_text.replace(':', '')
+                        target_var = node.target.id if hasattr(node.target, 'id') else 'item'
+
                     except:
-                        loop_text = f"for {node.target.id} in iterable"
+                        target_var = 'item'
+                        loop_text = f"for {target_var} in iterable"
 
                     iterable = self._evaluate_expression(node.iter)
-                    iterator = iter(iterable)
 
-                    loop_widget = SmartVariableWidget(loop_text,
-                                                      f"iterating over {len(list(iterable)) if hasattr(iterable, '__len__') else '?'} items")
+                    iterable_list = list(iterable)  # Convert to list for length
+
+                    iterator = iter(iterable_list)
+
+                    loop_widget = SmartVariableWidget(f"for {target_var}", f"0/{len(iterable_list)} items")
+
                     self.canvas.add_item(loop_widget)
 
                     current_frame.iterators[loop_id] = {
+
                         'iterator': iterator,
+
                         'widget': loop_widget,
+
                         'iteration': 0,
-                        'iterable': iterable
+
+                        'iterable': iterable_list,
+
+                        'target_var': target_var
+
                     }
 
                 loop_info = current_frame.iterators[loop_id]
 
                 try:
+
                     # Get next item
+
                     item_val = next(loop_info['iterator'])
+
                     loop_info['iteration'] += 1
 
-                    # Update loop variable in current frame
+                    # Update loop variable
+
                     current_frame.locals[node.target.id] = item_val
+
                     self._update_variable(node.target.id, item_val)
 
                     # Update loop widget
-                    loop_info['widget'].update_value(
-                        f"Iteration {loop_info['iteration']}: {node.target.id} = {item_val}")
 
-                    # Inject body + this loop node back for next iteration
+                    # Update loop widget
+                    loop_info['widget'].update_value(
+                        f"{loop_info['iteration']}/{len(loop_info['iterable'])}: {node.target.id} = {item_val}")
+
+                    # Don't create arrows for every loop iteration
                     current_frame.nodes[current_frame.ip + 1:current_frame.ip + 1] = node.body + [node]
 
+
                 except StopIteration:
+
                     # Loop finished
-                    loop_info['widget'].update_value("Loop completed")
+
+                    loop_info['widget'].update_value(f"Completed ({len(loop_info['iterable'])} items)")
+
                     del current_frame.iterators[loop_id]
 
                 current_frame.ip += 1
+
         except Exception as e:
             print(f"Runtime Error on line {getattr(node, 'lineno', '?')}: {e}")
             self._finish_execution()
@@ -340,21 +370,15 @@ class UIVisualizer(QObject):
             self._update_variable(var_name, new_value)
 
     def _execute_print(self, node: ast.Call):
-        input_vars_visitor = self.NameVisitor()
-        for arg in node.args:
-            input_vars_visitor.visit(arg)
-        input_items = [frame.variable_widgets[name] for name in input_vars_visitor.names for frame in
-                       reversed(self.call_stack) if name in frame.variable_widgets]
         try:
             text_on_line = self.code_editor.document().findBlockByLineNumber(node.lineno - 1).text()
             expression_str = text_on_line[text_on_line.find('(') + 1:text_on_line.rfind(')')].strip()
         except Exception:
             expression_str = "..."
+
         evaluated_args = [str(self._evaluate_expression(arg)) for arg in node.args]
         item = SmartPrintBlock(expression_str, " ".join(evaluated_args))
         self.canvas.add_item(item)
-        for input_item in input_items:
-            QTimer.singleShot(50, lambda ii=input_item, oi=item: self.canvas.add_connection(ii, oi))
 
     def _execute_call(self, node: ast.Call):
         func_name = node.func.id
@@ -378,7 +402,6 @@ class UIVisualizer(QObject):
         for name, value in new_frame.locals.items():
             self._update_variable(name, value, frame=new_frame)
         self.call_stack.append(new_frame)
-        self._refresh_all_connections()
 
     def _execute_method_call(self, node: ast.Call):
         """A simplified handler for common list/dict method calls."""
@@ -534,9 +557,6 @@ class UIVisualizer(QObject):
             self._clear_highlight()
             print("Visualization stopped by user.")
 
-    def _refresh_all_connections(self):
-        QTimer.singleShot(300, lambda: [conn.update_path() for conn in self.canvas.connections if
-                                        hasattr(conn, 'update_path')])
 
     class NameVisitor(ast.NodeVisitor):
         def __init__(self):
