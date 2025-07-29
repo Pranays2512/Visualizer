@@ -722,3 +722,182 @@ class KeyValuePairWidget(GraphicsObjectWidget):
         glow.setBlurRadius(15)
         self.setGraphicsEffect(glow)
         QTimer.singleShot(1000, lambda: self.setGraphicsEffect(None))
+
+
+class ObjectWidget(GraphicsObjectWidget):
+    """Visualizes class instances with their attributes and methods"""
+
+    def __init__(self, name: str, obj_data: object, parent=None):
+        super().__init__(parent)
+        self.name = name
+        self.obj_data = obj_data
+        self.class_name = obj_data.__class__.__name__
+        self.attribute_widgets = {}
+        self._width = 0
+        self._height = 0
+        self.expanded = True
+
+        # Header text showing class name
+        self.header_text = QGraphicsTextItem(f"{self.name}: {self.class_name}", self)
+        self.header_text.setFont(QFont(FONT_FAMILY, 11, QFont.Bold))
+        self.header_text.setDefaultTextColor(QColor("#8be9fd"))  # Cyan for objects
+
+        # Expand/collapse button
+        self.toggle_button = QGraphicsTextItem("▼", self)
+        self.toggle_button.setFont(QFont(FONT_FAMILY, 10, QFont.Bold))
+        self.toggle_button.setDefaultTextColor(QColor("#8be9fd"))
+
+        self._create_attributes()
+        self._update_layout()
+
+    def _create_attributes(self):
+        """Create widgets for object attributes"""
+        # Clear existing attribute widgets
+        for widget in self.attribute_widgets.values():
+            if widget.scene():
+                widget.scene().removeItem(widget)
+        self.attribute_widgets.clear()
+
+        # Get object attributes (excluding methods and private attributes)
+        if hasattr(self.obj_data, '__dict__'):
+            attributes = {k: v for k, v in self.obj_data.__dict__.items()
+                          if not k.startswith('_') and not callable(v)}
+        else:
+            # For objects without __dict__ (like built-in types)
+            attributes = {}
+            for attr in dir(self.obj_data):
+                if not attr.startswith('_') and not callable(getattr(self.obj_data, attr)):
+                    try:
+                        attributes[attr] = getattr(self.obj_data, attr)
+                    except:
+                        pass
+
+        # Create attribute widgets
+        for attr_name, attr_value in attributes.items():
+            attr_widget = ObjectAttributeWidget(attr_name, attr_value, self)
+            self.attribute_widgets[attr_name] = attr_widget
+
+    def _update_layout(self):
+        self.prepareGeometryChange()
+
+        # Position header
+        self.header_text.setPos(25, 10)
+        self.toggle_button.setPos(5, 10)
+
+        header_height = self.header_text.boundingRect().height()
+        y_offset = header_height + 20
+        max_width = self.header_text.boundingRect().width() + 30
+
+        if self.expanded:
+            # Position attribute widgets
+            for attr_widget in self.attribute_widgets.values():
+                attr_widget.setPos(15, y_offset)
+                attr_widget.show()
+                y_offset += attr_widget.boundingRect().height() + 5
+                max_width = max(max_width, attr_widget.boundingRect().width() + 30)
+        else:
+            # Hide attribute widgets when collapsed
+            for attr_widget in self.attribute_widgets.values():
+                attr_widget.hide()
+
+        self._width = max_width
+        self._height = y_offset + 10
+        self.positionChanged.emit()
+
+    def boundingRect(self):
+        return QRectF(0, 0, self._width, self._height)
+
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.boundingRect()
+
+        # Background gradient
+        gradient = QLinearGradient(0, 0, 0, rect.height())
+        gradient.setColorAt(0, QColor(139, 233, 253, 40))  # Cyan theme
+        gradient.setColorAt(1, QColor(139, 233, 253, 20))
+
+        path = QPainterPath()
+        path.addRoundedRect(rect, 10, 10)
+        painter.fillPath(path, QBrush(gradient))
+
+        # Border
+        painter.setPen(QPen(QColor("#8be9fd"), 2))
+        painter.drawPath(path)
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        # Toggle expansion when clicking the button area
+        if event.pos().x() < 20:
+            self.toggle_expansion()
+
+    def toggle_expansion(self):
+        """Toggle between expanded and collapsed states"""
+        self.expanded = not self.expanded
+        self.toggle_button.setPlainText("▼" if self.expanded else "▶")
+        self._update_layout()
+
+    def update_object(self, new_obj):
+        """Update object data and refresh visualization"""
+        self.obj_data = new_obj
+        self.class_name = new_obj.__class__.__name__
+        self.header_text.setPlainText(f"{self.name}: {self.class_name}")
+        self._create_attributes()
+        self._update_layout()
+
+
+class ObjectAttributeWidget(GraphicsObjectWidget):
+    """Widget for individual object attributes"""
+
+    def __init__(self, attr_name: str, attr_value: Any, parent=None):
+        super().__init__(parent)
+        self.attr_name = attr_name
+        self.attr_value = attr_value
+        self._width = 0
+        self._height = 0
+
+        # Attribute name
+        self.name_text = QGraphicsTextItem(f"{attr_name}:", self)
+        self.name_text.setFont(QFont(FONT_FAMILY, 9, QFont.Bold))
+        self.name_text.setDefaultTextColor(QColor("#ffb86c"))  # Orange for attribute names
+
+        # Attribute value
+        value_str = self._format_value(attr_value)
+        self.value_text = QGraphicsTextItem(value_str, self)
+        self.value_text.setFont(QFont(FONT_FAMILY, 9))
+        self.value_text.setDefaultTextColor(QColor("white"))
+
+        self._update_layout()
+
+    def _format_value(self, value):
+        """Format attribute value for display"""
+        if isinstance(value, str):
+            return f'"{value}"'
+        elif isinstance(value, (list, tuple)):
+            return f"{type(value).__name__}({len(value)} items)"
+        elif hasattr(value, '__dict__'):
+            return f"{value.__class__.__name__} object"
+        else:
+            return str(value)
+
+    def _update_layout(self):
+        self.prepareGeometryChange()
+
+        self.name_text.setPos(10, 5)
+        name_width = self.name_text.boundingRect().width()
+        self.value_text.setPos(15 + name_width, 5)
+
+        self._width = self.value_text.pos().x() + self.value_text.boundingRect().width() + 10
+        self._height = max(self.name_text.boundingRect().height(),
+                           self.value_text.boundingRect().height()) + 10
+
+    def boundingRect(self):
+        return QRectF(0, 0, self._width, self._height)
+
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.boundingRect()
+
+        # Subtle background for attributes
+        painter.setBrush(QColor(68, 71, 90, 120))
+        painter.setPen(Qt.NoPen)
+        painter.drawRoundedRect(rect, 4, 4)

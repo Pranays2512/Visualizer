@@ -507,13 +507,15 @@ class EnhancedParticleEffect(QGraphicsObject):
 
                 painter.setBrush(glow)
                 painter.setPen(QPen(Qt.NoPen))
-                painter.drawEllipse(-particle['size'] / 2, -particle['size'] / 2,
-                                    particle['size'], particle['size'])
+
+                # FIX: Use QRectF for float values
+                size = particle['size']
+                rect = QRectF(-size / 2, -size / 2, size, size)
+                painter.drawEllipse(rect)
 
                 painter.restore()
 
 
-# Global instances
 animation_context = AnimationContext()
 importance_tracker = ImportanceTracker()
 
@@ -664,37 +666,42 @@ class GraphicsObjectWidget(QGraphicsObject):
         """Enhanced entrance animation with physics"""
 
         def start_animation():
-            animation_context.set_context("creating")
+            # Check if widget still exists
+            try:
+                if not self.scene() or not self.isVisible():
+                    return
 
-            # Set initial state
-            self.setOpacity(0.0)
-            self.setScale(0.6)
-            self.setRotation(random.uniform(-10, 10))
-            self.show()
+                animation_context.set_context("creating")
 
-            # Physics setup
-            self.physics.set_immediate(self.pos())
+                # Set initial state
+                self.setOpacity(0.0)
+                self.setScale(0.6)
+                self.setRotation(random.uniform(-10, 10))
+                self.show()
 
-            # Configure animations
-            self.opacity_animation.setStartValue(0.0)
-            self.opacity_animation.setEndValue(1.0)
+                # Physics setup
+                self.physics.set_immediate(self.pos())
 
-            self.scale_animation.setStartValue(0.6)
-            self.scale_animation.setEndValue(1.0)
-            self.scale_animation.set_elastic_effect()
+                # Configure animations
+                self.opacity_animation.setStartValue(0.0)
+                self.opacity_animation.setEndValue(1.0)
+                self.scale_animation.setStartValue(0.6)
+                self.scale_animation.setEndValue(1.0)
+                self.scale_animation.set_elastic_effect()
+                self.rotation_animation.setStartValue(self.rotation())
+                self.rotation_animation.setEndValue(0.0)
+                self.rotation_animation.set_anticipation_effect()
 
-            self.rotation_animation.setStartValue(self.rotation())
-            self.rotation_animation.setEndValue(0.0)
-            self.rotation_animation.set_anticipation_effect()
+                # Start animations
+                self.entrance_group.start()
+                self.rotation_animation.start()
 
-            # Start animations
-            self.entrance_group.start()
-            self.rotation_animation.start()
+                # Track creation importance
+                importance_tracker.update_importance(self, "focus")
 
-
-
-            # Track creation importance
-            importance_tracker.update_importance(self, "focus")
+            except RuntimeError:
+                # Widget has been deleted, ignore
+                pass
 
         if delay > 0:
             QTimer.singleShot(delay, start_animation)
