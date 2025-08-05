@@ -942,7 +942,7 @@ class DynamicCanvas(QGraphicsView):
         return super().eventFilter(obj, event)
 
     def add_item(self, item: QGraphicsItem, item_type: Optional[str] = None):
-        """Add item with minimal visual connections"""
+        """Enhanced item addition with better type detection"""
         if not item_type:
             if isinstance(item, SmartVariableWidget):
                 item_type = 'variable'
@@ -950,12 +950,20 @@ class DynamicCanvas(QGraphicsView):
                 item_type = 'print'
             elif isinstance(item, ScopeWidget):
                 item_type = 'scope'
+            # ADD: Better detection for advanced widgets
+            elif hasattr(item, '__class__') and 'Widget' in item.__class__.__name__:
+                if item.__class__.__name__ in ['ArrayWidget', 'StringWidget', 'TreeWidget', 'ObjectWidget']:
+                    item_type = 'data_structure'
+                elif item.__class__.__name__ == 'DictionaryWidget':
+                    item_type = 'dictionary'
 
-        # Position item
-        if item_type == 'variable':
-            predicted_pos = self._get_next_variable_position()
+        # Enhanced positioning logic using existing methods
+        if item_type == 'scope':
+            predicted_pos = self._get_scope_position()
+        elif item_type in ['data_structure', 'dictionary']:
+            predicted_pos = self._get_data_structure_position()
         elif item_type == 'print':
-            predicted_pos = self._get_next_print_position()
+            predicted_pos = self._get_next_print_position()  # Use existing method
         else:
             predicted_pos = self.layout_predictor.predict_next_position(item_type)
 
@@ -966,9 +974,37 @@ class DynamicCanvas(QGraphicsView):
         if hasattr(item, 'show_animated'):
             item.show_animated(delay=len(self.items) * 30)
 
-        # Only show connection for print statements to their source variable
-
         QTimer.singleShot(200, self._auto_resize_canvas)
+    def _get_scope_position(self):
+        """Get position for scope widgets (stack them vertically on the right)"""
+        scopes = [item for item in self.items if isinstance(item, ScopeWidget)]
+        if scopes:
+            rightmost = max(item.pos().x() + item.boundingRect().width() for item in self.items)
+            bottom = max(scope.pos().y() + scope.boundingRect().height() for scope in scopes)
+            return QPointF(rightmost + H_SPACING, bottom + V_SPACING)
+        else:
+            # First scope - place on right side
+            if self.items:
+                rightmost = max(item.pos().x() + item.boundingRect().width() for item in self.items)
+                return QPointF(rightmost + H_SPACING * 2, MARGIN)
+            return QPointF(400, MARGIN)
+
+    def _get_data_structure_position(self):
+        """Get position for complex data structures"""
+        data_structures = [item for item in self.items
+                           if hasattr(item, '__class__') and 'Widget' in item.__class__.__name__
+                           and not isinstance(item, (SmartVariableWidget, SmartPrintBlock, ScopeWidget))]
+
+        if data_structures:
+            bottom = max(ds.pos().y() + ds.boundingRect().height() for ds in data_structures)
+            return QPointF(MARGIN, bottom + V_SPACING * 2)
+        else:
+            # Place below variables
+            variables = [item for item in self.items if isinstance(item, SmartVariableWidget)]
+            if variables:
+                bottom = max(var.pos().y() + var.boundingRect().height() for var in variables)
+                return QPointF(MARGIN, bottom + V_SPACING * 2)
+            return QPointF(MARGIN, MARGIN)
     def _is_simple_sequence(self):
             """Check if this is simple sequential code (no loops)"""
             # Don't show arrows if we have many items (likely a loop)

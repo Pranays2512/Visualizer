@@ -166,6 +166,10 @@ class UIVisualizer(QObject):
     def set_speed(self, interval: int):
         self.speed_interval = interval
 
+    def set_input_sequence(self, inputs: List[str]):
+        """Set a sequence of inputs for programs that require user input"""
+        self.input_sequence = inputs.copy()
+
     def _next_step(self):
         if self.is_paused or not self.is_running or not self.call_stack:
             if not self.call_stack and self.is_running:
@@ -234,40 +238,43 @@ class UIVisualizer(QObject):
             elif isinstance(node, ast.While):
                 loop_id = id(node)
 
-                # Evaluate condition
-                test_result = self._evaluate_expression(node.test)
-
+                # CHANGE: Fix condition text extraction
                 if loop_id not in current_frame.iterators:
-                    # First time - create loop condition widget
                     try:
-                        condition_text = self.code_editor.document().findBlockByLineNumber(
-                            node.lineno - 1).text().strip()
+                        # Use the actual line from code editor instead of astor
+                        line_number = node.lineno - 1
+                        condition_text = self.code_editor.document().findBlockByLineNumber(line_number).text().strip()
                         condition_text = condition_text.replace('while ', '').replace(':', '').strip()
                     except:
                         condition_text = "condition"
 
-                    loop_widget = SmartVariableWidget(f"while ({condition_text})", str(test_result))
-                    self.canvas.add_item(loop_widget)
-
                     current_frame.iterators[loop_id] = {
-                        'widget': loop_widget,
+                        'condition_text': condition_text,
                         'iteration': 0,
-                        'condition_text': condition_text
+                        'widget': None,
+                        'body_nodes': node.body.copy()  # ADD: Store body nodes
                     }
 
                 loop_info = current_frame.iterators[loop_id]
+                test_result = self._evaluate_expression(node.test)
+
+                # CHANGE: Create widget only once and update it
+                if loop_info['widget'] is None:
+                    loop_info['widget'] = SmartVariableWidget(f"while {loop_info['condition_text']}", "Starting...")
+                    self.canvas.add_item(loop_info['widget'])
 
                 if test_result:
-                    # Continue loop
                     loop_info['iteration'] += 1
-                    loop_info['widget'].update_value(f"Iteration {loop_info['iteration']}")
-                    # Don't create arrows for every loop iteration
+                    loop_info['widget'].update_value(f"Iteration {loop_info['iteration']}: {test_result}")
 
-                    # Insert body + loop node back for next iteration
-                    current_frame.nodes[current_frame.ip + 1:current_frame.ip + 1] = node.body + [node]
+                    # ADD: Insert loop body nodes BEFORE current position, not AT current position
+                    for i, body_node in enumerate(reversed(loop_info['body_nodes'])):
+                        current_frame.nodes.insert(current_frame.ip + 1, body_node)
+
+                    # ADD: Insert the while loop again after body for next iteration
+                    current_frame.nodes.insert(current_frame.ip + len(loop_info['body_nodes']) + 1, node)
                 else:
-                    # Exit loop
-                    loop_info['widget'].update_value("False (loop ended)")
+                    loop_info['widget'].update_value("Loop ended")
                     del current_frame.iterators[loop_id]
 
                 current_frame.ip += 1
@@ -275,52 +282,51 @@ class UIVisualizer(QObject):
                 self._execute_class_definition(node)
                 current_frame.ip += 1
 
-            elif isinstance(node, ast.For):
-                loop_id = id(node)
-                if loop_id not in current_frame.iterators:
-                    # Initialize for loop
-                    try:
-                        loop_text = self.code_editor.document().findBlockByLineNumber(node.lineno - 1).text().strip()
-                        target_var = node.target.id if hasattr(node.target, 'id') else 'item'
 
-                    except:
-                        target_var = 'item'
-                        loop_text = f"for {target_var} in iterable"
+
+            elif isinstance(node, ast.For):
+
+                loop_id = id(node)
+
+                if loop_id not in current_frame.iterators:
                     iterable = self._evaluate_expression(node.iter)
-                    iterable_list = list(iterable)  # Convert to list for length
-                    iterator = iter(iterable_list)
-                    loop_widget = SmartVariableWidget(f"for {target_var}", f"0/{len(iterable_list)} items")
-                    self.canvas.add_item(loop_widget)
+                    iterable_list = list(iterable)
                     current_frame.iterators[loop_id] = {
-                        'iterator': iterator,
-                        'widget': loop_widget,
+                        'iterator': iter(iterable_list),
+                        'iterable_list': iterable_list,
                         'iteration': 0,
-                        'iterable': iterable_list,
-                        'target_var': target_var
+                        'target_var': node.target.id,
+                        'widget': None,
+                        'body_nodes': node.body.copy()  # ADD: Store body nodes
+
                     }
                 loop_info = current_frame.iterators[loop_id]
+
+                if loop_info['widget'] is None:
+                    loop_info['widget'] = SmartVariableWidget(
+                        f"for {loop_info['target_var']}",
+                        f"0/{len(loop_info['iterable_list'])}"
+                    )
+                    self.canvas.add_item(loop_info['widget'])
                 try:
-                    # Get next item
-                    item_val = next(loop_info['iterator'])
+                    item_value = next(loop_info['iterator'])
                     loop_info['iteration'] += 1
-                    # Update loop variable
-                    current_frame.locals[node.target.id] = item_val
-                    self._update_variable(node.target.id, item_val)
-                    # Update loop widget
+                    # Update loop variable in current frame
+                    current_frame.locals[node.target.id] = item_value
+                    self._update_variable(node.target.id, item_value)
                     # Update loop widget
                     loop_info['widget'].update_value(
-                        f"{loop_info['iteration']}/{len(loop_info['iterable'])}: {node.target.id} = {item_val}")
-                    # Don't create arrows for every loop iteration
-                    current_frame.nodes[current_frame.ip + 1:current_frame.ip + 1] = node.body + [node]
+                        f"{loop_info['iteration']}/{len(loop_info['iterable_list'])}: {item_value}"
+                    )
 
-
+                    for i, body_node in enumerate(reversed(loop_info['body_nodes'])):
+                        current_frame.nodes.insert(current_frame.ip + 1, body_node)
+                    current_frame.nodes.insert(current_frame.ip + len(loop_info['body_nodes']) + 1, node)
 
                 except StopIteration:
-                    loop_info['widget'].update_value(f"Completed ({len(loop_info['iterable'])} items)")
+                    loop_info['widget'].update_value("Loop completed")
                     del current_frame.iterators[loop_id]
-
                 current_frame.ip += 1
-
         except Exception as e:
             print(f"Runtime Error on line {getattr(node, 'lineno', '?')}: {e}")
             self._finish_execution()
@@ -330,29 +336,56 @@ class UIVisualizer(QObject):
             self.step_timer.start(self.speed_interval)
 
     def _execute_function_directly(self, func_def: ast.FunctionDef, args: List[Any]) -> Any:
-        """Execute function directly for recursive calls"""
-        # Set up parameters
+        """Execute function with proper recursion visualization"""
+
+        # Check recursion depth to prevent infinite loops
+        current_recursion_depth = len([f for f in self.call_stack if func_def.name in f.name])
+        MAX_RECURSION_DEPTH = 50  # Safety limit
+
+        if current_recursion_depth > MAX_RECURSION_DEPTH:
+            return None  # Or raise RecursionError
+
+        # Create new frame for this function call
+        new_frame = CallFrame(f"{func_def.name}", func_def.body)
         param_names = [arg.arg for arg in func_def.args.args]
-        local_vars = dict(zip(param_names, args))
+        new_frame.locals.update(zip(param_names, args))
 
-        # Create temporary frame
-        temp_frame = CallFrame(f"{func_def.name}_recursive", func_def.body)
-        temp_frame.locals = local_vars
+        # Create scope widget for recursion visualization
+        scope_name = f"{func_def.name}({', '.join(map(str, args))})"
+        if current_recursion_depth > 0:
+            scope_name += f" [Depth {current_recursion_depth + 1}]"
 
-        # Add to call stack temporarily
-        self.call_stack.append(temp_frame)
+        scope_widget = ScopeWidget(scope_name)
+        new_frame.scope_widget = scope_widget
+        self.canvas.add_item(scope_widget)
+
+        # Show parameters in scope
+        for name, value in new_frame.locals.items():
+            self._update_variable(name, value, frame=new_frame)
+
+        # Add to call stack
+        self.call_stack.append(new_frame)
 
         try:
-            # Execute function body
+            # Execute function body step by step instead of all at once
             for stmt in func_def.body:
                 if isinstance(stmt, ast.Return):
                     if stmt.value:
                         result = self._evaluate_expression(stmt.value)
+                        # Show return value in scope
+                        return_widget = SmartVariableWidget("return", result)
+                        scope_widget.addItem(return_widget)
                         return result
                     else:
                         return None
+                elif isinstance(stmt, ast.Assign):
+                    value = self._evaluate_expression(stmt.value)
+                    for target in stmt.targets:
+                        if isinstance(target, ast.Name):
+                            new_frame.locals[target.id] = value
+                            self._update_variable(target.id, value, frame=new_frame)
                 elif isinstance(stmt, ast.If):
-                    # Handle if statements
+                    # Handle conditional returns
                     test_result = self._evaluate_expression(stmt.test)
                     body_to_execute = stmt.body if test_result else stmt.orelse
 
@@ -360,22 +393,143 @@ class UIVisualizer(QObject):
                         if isinstance(sub_stmt, ast.Return):
                             if sub_stmt.value:
                                 result = self._evaluate_expression(sub_stmt.value)
+                                return_widget = SmartVariableWidget("return", result)
+                                scope_widget.addItem(return_widget)
                                 return result
                             else:
                                 return None
-                elif isinstance(stmt, ast.Assign):
-                    # Handle assignments within function
-                    value = self._evaluate_expression(stmt.value)
-                    for target in stmt.targets:
-                        if isinstance(target, ast.Name):
-                            temp_frame.locals[target.id] = value
+                        elif isinstance(sub_stmt, ast.Assign):
+                            value = self._evaluate_expression(sub_stmt.value)
+                            for target in sub_stmt.targets:
+                                if isinstance(target, ast.Name):
+                                    new_frame.locals[target.id] = value
+                                    self._update_variable(target.id, value, frame=new_frame)
 
-            return None  # No explicit return
+            return None
 
         finally:
-            # Clean up - remove temporary frame
-            if temp_frame in self.call_stack:
-                self.call_stack.remove(temp_frame)
+            # Clean up - remove frame from stack
+            if new_frame in self.call_stack:
+                self.call_stack.remove(new_frame)
+            # Delay removal of scope widget for visualization
+            if scope_widget:
+                QTimer.singleShot(2000, scope_widget.remove_animated)
+    def _execute_assignment_in_frame(self, stmt: ast.Assign, frame: CallFrame):
+        """Execute assignment within a specific frame"""
+        value = self._evaluate_expression(stmt.value)
+        for target in stmt.targets:
+            if isinstance(target, ast.Name):
+                frame.locals[target.id] = value
+                self._update_variable(target.id, value, frame=frame)
+
+    def _execute_if_in_frame(self, stmt: ast.If, frame: CallFrame) -> Any:
+        """Execute if statement within a frame, return any return value"""
+        test_result = self._evaluate_expression(stmt.test)
+        body_to_execute = stmt.body if test_result else stmt.orelse
+
+        for sub_stmt in body_to_execute:
+            if isinstance(sub_stmt, ast.Return):
+                if sub_stmt.value:
+                    return self._evaluate_expression(sub_stmt.value)
+                else:
+                    return None
+            elif isinstance(sub_stmt, ast.Assign):
+                self._execute_assignment_in_frame(sub_stmt, frame)
+
+        return None
+
+    def _execute_class_instantiation(self, class_name: str, args: List[Any]) -> Any:
+        """Execute class instantiation with proper visualization"""
+        if class_name not in self.classes:
+            raise NameError(f"Class '{class_name}' not defined")
+
+        class_def = self.classes[class_name]
+
+        # Create instance object with proper attributes
+        instance = type(class_name, (), {})()
+
+        # Create visual representation immediately
+        from .advanced_data_visualizer import ObjectWidget
+        obj_widget = ObjectWidget(f"{class_name}_instance", instance)
+        self.canvas.add_item(obj_widget)
+
+        # Find and execute __init__ if it exists
+        for node in class_def.body:
+            if isinstance(node, ast.FunctionDef) and node.name == '__init__':
+                # Execute __init__ in a temporary frame
+                init_frame = CallFrame(f"{class_name}.__init__", node.body)
+                init_frame.locals['self'] = instance
+
+                # Set up parameters
+                param_names = [arg.arg for arg in node.args.args[1:]]  # Skip 'self'
+                for param, value in zip(param_names, args):
+                    init_frame.locals[param] = value
+
+                # Execute __init__ body
+                self.call_stack.append(init_frame)
+                try:
+                    for stmt in node.body:
+                        if isinstance(stmt, ast.Assign):
+                            # Handle self.attribute = value
+                            for target in stmt.targets:
+                                if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
+                                    if target.value.id == 'self':
+                                        attr_value = self._evaluate_expression(stmt.value)
+                                        setattr(instance, target.attr, attr_value)
+                                        # Update visual representation
+                                        obj_widget.update_object(instance)
+                finally:
+                    self.call_stack.pop()
+                break
+
+        return instance
+    def _execute_class_instantiation(self, class_name: str, args: List[Any]) -> Any:
+        """Properly instantiate and visualize class objects"""
+        if class_name not in self.classes:
+            # Try built-in classes
+            if class_name in ['list', 'dict', 'set', 'tuple']:
+                return eval(class_name)(*args)
+            raise NameError(f"Class '{class_name}' not defined")
+
+        class_def = self.classes[class_name]
+
+        # Create instance object
+        instance = type(class_name, (), {})()
+
+        # Find and execute __init__ if it exists
+        init_method = None
+        for node in class_def.body:
+            if isinstance(node, ast.FunctionDef) and node.name == '__init__':
+                init_method = node
+                break
+
+        if init_method:
+            # Execute __init__ with proper scope
+            init_frame = CallFrame(f"{class_name}.__init__", init_method.body)
+            init_frame.locals['self'] = instance
+
+            # Set up parameters
+            param_names = [arg.arg for arg in init_method.args.args[1:]]  # Skip 'self'
+            for param, value in zip(param_names, args):
+                init_frame.locals[param] = value
+
+            # Execute __init__ body
+            old_stack_len = len(self.call_stack)
+            self.call_stack.append(init_frame)
+
+            try:
+                for stmt in init_method.body:
+                    if isinstance(stmt, ast.Assign):
+                        for target in stmt.targets:
+                            if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
+                                if target.value.id == 'self':
+                                    attr_value = self._evaluate_expression(stmt.value)
+                                    setattr(instance, target.attr, attr_value)
+            finally:
+                if len(self.call_stack) > old_stack_len:
+                    self.call_stack.pop()
+
+        return instance
 
     def _call_function_directly(self, func_name: str, args: List[Any]) -> Any:
         """Directly execute a function call and return its result - SIMPLIFIED RECURSION"""
@@ -616,6 +770,10 @@ class UIVisualizer(QObject):
                 self._update_variable(var_name, target_var, frame=frame)
                 break
 
+    def set_input_sequence(self, inputs: List[str]):
+        """Set a sequence of inputs for programs that require user input"""
+        self.input_sequence = inputs.copy()
+
     def _handle_return(self, value: Any):
         if len(self.call_stack) > 1:
             frame_to_pop = self.call_stack.pop()
@@ -633,49 +791,68 @@ class UIVisualizer(QObject):
         # Remove existing widget if it exists
         if var_name in current_frame.variable_widgets:
             widget = current_frame.variable_widgets[var_name]
-
-            # Try to update existing widget if same type
-            if isinstance(widget, ArrayWidget) and isinstance(value, list):
-                widget.update_array(value)
-                return
-            elif isinstance(widget, StringWidget) and isinstance(value, str):
-                widget.update_string(value)
-                return
-            elif isinstance(widget, DictionaryWidget) and isinstance(value, dict):
-                pass  # Will recreate below
-            elif isinstance(widget, ObjectWidget) and hasattr(value, '__dict__'):
-                widget.update_object(value)
-                return
-            elif isinstance(widget, SmartVariableWidget) and type(value) in (int, float, bool, type(None)):
-                widget.update_value(value)
-                return
-
-            # Remove widget if type changed
             widget.remove_animated()
 
-        # Create new widget based on value type
+        # CREATE: Better type detection for trees
         item = None
         if isinstance(value, list):
             item = ArrayWidget(var_name, value)
         elif isinstance(value, str):
             item = StringWidget(var_name, value)
         elif isinstance(value, dict):
-            item = DictionaryWidget(var_name, value)
+            # ADD: Check if it's a tree structure
+            if self._is_tree_structure(value):
+                from .advanced_data_visualizer import TreeWidget
+                item = TreeWidget(var_name, value)
+            else:
+                item = DictionaryWidget(var_name, value)
         elif hasattr(value, '__dict__') and not callable(value):
-            # This is a custom object - use ObjectWidget
             from .advanced_data_visualizer import ObjectWidget
             item = ObjectWidget(var_name, value)
         else:
-            # Default to SmartVariableWidget for primitives
             item = SmartVariableWidget(var_name, value)
 
         if item:
             current_frame.variable_widgets[var_name] = item
-
             if current_frame.scope_widget:
                 current_frame.scope_widget.addItem(item)
             else:
                 self.canvas.add_item(item)
+
+    # ADD: Improve tree detection method (around line 380)
+    def _is_tree_structure(self, data: dict) -> bool:
+        """Enhanced tree structure detection"""
+        if not isinstance(data, dict):
+            return False
+
+        # Check for common tree patterns
+        tree_indicators = [
+            {'value', 'left', 'right'},  # Binary tree
+            {'data', 'children'},  # General tree
+            {'val', 'left', 'right'},  # LeetCode style
+            {'key', 'left', 'right'}  # BST
+        ]
+
+        data_keys = set(data.keys())
+        for pattern in tree_indicators:
+            if pattern.issubset(data_keys) or (
+                    'value' in data_keys and any(k in data_keys for k in ['left', 'right', 'children'])):
+                return True
+
+        return False
+    def _is_tree_structure(self, data: dict) -> bool:
+            """Check if dictionary represents a tree structure"""
+            if not isinstance(data, dict):
+                return False
+
+            # Simple heuristic: check if it has 'value' and 'left'/'right' keys
+            required_keys = {'value'}
+            optional_keys = {'left', 'right', 'children'}
+
+            if not required_keys.issubset(data.keys()):
+                return False
+
+            return any(key in data for key in optional_keys)
 
     def _evaluate_expression(self, node: ast.AST) -> Any:
         if node is None:
@@ -684,6 +861,26 @@ class UIVisualizer(QObject):
         # Literals
         if isinstance(node, ast.Constant):
             return node.value
+        # Handle f-strings (JoinedStr nodes)
+        if isinstance(node, ast.JoinedStr):
+            result = ""
+            for value in node.values:
+                if isinstance(value, ast.Constant):
+                    result += str(value.value)
+                elif isinstance(value, ast.FormattedValue):
+                    # Evaluate the expression inside the f-string
+                    expr_value = self._evaluate_expression(value.value)
+                    # Handle format specification if present
+                    if value.format_spec:
+                        format_spec = self._evaluate_expression(value.format_spec)
+                        result += format(expr_value, format_spec)
+                    else:
+                        result += str(expr_value)
+                else:
+                    # Fallback for other types
+                    result += str(self._evaluate_expression(value))
+            return result
+
         if isinstance(node, (ast.Num, ast.Str, ast.NameConstant)):
             return ast.literal_eval(node)
 
@@ -704,10 +901,17 @@ class UIVisualizer(QObject):
             raise NameError(f"name '{node.id}' is not defined")
 
         # Function calls - THIS IS THE CRITICAL FIX
+        # Around line 470, in the ast.Call handling section:
         if isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name):
                 func_name = node.func.id
                 args = [self._evaluate_expression(arg) for arg in node.args]
+
+                # ADD: Handle class instantiation properly
+                if func_name in self.classes:
+                    instance = self._execute_class_instantiation(func_name, args)
+                    # CREATE: Visualization for the instance
+                    return instance
 
                 # Handle built-in functions
                 if func_name in ['len', 'str', 'int', 'float', 'bool', 'list', 'dict', 'tuple', 'range', 'print']:
@@ -721,6 +925,35 @@ class UIVisualizer(QObject):
                     func_def = self.functions[func_name]
                     return self._execute_function_directly(func_def, args)
 
+                # Handle input function
+                if func_name == 'input':
+                    # ADD: Proper input handling
+                    prompt = args[0] if args else "Enter input: "
+
+                    if hasattr(self, 'input_sequence') and self.input_sequence:
+                        user_input = self.input_sequence.pop(0)
+                    else:
+                        # Show input dialog for interactive input
+                        from PyQt5.QtWidgets import QInputDialog
+                        user_input, ok = QInputDialog.getText(
+                            self.main_window,
+                            'User Input Required',
+                            str(prompt)
+                        )
+                        if not ok:
+                            user_input = ""
+
+                    # CREATE: Visual representation of input
+                    input_widget = SmartVariableWidget("input()", f'"{user_input}"')
+                    self.canvas.add_item(input_widget)
+
+                    # ADD: Also show what was prompted
+                    prompt_widget = SmartPrintBlock("prompt", str(prompt))
+                    self.canvas.add_item(prompt_widget)
+
+                    return user_input
+
+                # If no other function matched, raise an error
                 raise NameError(f"Function '{func_name}' not found")
 
             # Handle method calls

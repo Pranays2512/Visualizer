@@ -28,39 +28,129 @@ HIGHLIGHT_ANIMATION_COLOR = QColor("#50fa7b")
 
 
 class ArrayWidget(GraphicsObjectWidget):
+    def __init__(self, name: str, array_data: List[Any], parent=None):
+        super().__init__(parent)  # Only pass parent to GraphicsObjectWidget
+        self.name = name
+        self.array_data = array_data.copy() if array_data else []
+        self.cell_widgets = []
+        self.index_labels = []
+        self._width = 0
+        self._height = 0
+
+        # Create name text
+        self.name_text = QGraphicsTextItem(f'{self.name} = {self.array_data}', self)
+        self.name_text.setFont(QFont(FONT_FAMILY, 11, QFont.Bold))
+        self.name_text.setDefaultTextColor(QColor("#50fa7b"))
+
+        self._create_cells()
+        self._update_layout()
+
+    def _create_cells(self):
+        """Create cell widgets for array elements"""
+        for cell in self.cell_widgets:
+            if cell.scene():
+                cell.scene().removeItem(cell)
+        for label in self.index_labels:
+            if label.scene():
+                label.scene().removeItem(label)
+
+        self.cell_widgets.clear()
+        self.index_labels.clear()
+
+        for i, value in enumerate(self.array_data):
+            cell = ArrayCellWidget(i, value, self)
+            self.cell_widgets.append(cell)
+
+            # Create index label
+            index_label = QGraphicsTextItem(str(i), self)
+            index_label.setFont(QFont(FONT_FAMILY, 8))
+            index_label.setDefaultTextColor(QColor("#6272a4"))
+            self.index_labels.append(index_label)
+
     def _update_layout(self):
+        """Layout array cells horizontally"""
         self.prepareGeometryChange()
+
+        # Position name text
         self.name_text.setPos(10, 5)
         name_height = self.name_text.boundingRect().height()
+
+        # Starting position for cells
         start_x = 10
         start_y = name_height + 15
+
+        if not self.cell_widgets:
+            self._width = max(200, self.name_text.boundingRect().width() + 20)
+            self._height = start_y + 50
+            return
+
+        # Calculate cell widths
         font_metrics = QFontMetrics(QFont(FONT_FAMILY, 10))
-        content_widths = [
-             max(30, font_metrics.width(str(cell.value)) + 18)
-             for cell in self.cell_widgets
-        ]
         running_x = start_x
-        for i, (cell, label, w) in zip(
-                range(len(self.cell_widgets)), self.cell_widgets, self.index_labels, content_widths):
-            cell.set_custom_width(w)
+
+        for i, (cell, label) in enumerate(zip(self.cell_widgets, self.index_labels)):
+            # Calculate width needed for this cell
+            content_width = max(30, font_metrics.width(str(cell.value)) + 18)
+            cell.set_custom_width(content_width)
+
+            # Position cell
             cell.setPos(running_x, start_y)
-            label_x = running_x + (w - label.boundingRect().width()) / 2
+
+            # Position index label below cell
+            label_x = running_x + (content_width - label.boundingRect().width()) / 2
             label.setPos(label_x, start_y + cell._height + 5)
-            running_x += w + 2
-        self._width = running_x + 10 if self.cell_widgets else 80
-        self._height = start_y + 35 + 25
+
+            # Move to next position
+            running_x += content_width + 2
+
+        # Update widget dimensions
+        self._width = running_x + 10
+        self._height = start_y + 35 + 25  # cell height + label height + margins
+
+    def update_array(self, new_array: List[Any]):
+        """Update array data with animation"""
+        if new_array == self.array_data:
+            return
+
+        self.array_data = new_array.copy()
+        self.name_text.setPlainText(f'{self.name} = {self.array_data}')
+        self._create_cells()
+        self._update_layout()
+
+    def boundingRect(self):
+        return QRectF(0, 0, self._width, self._height)
+
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.boundingRect()
+
+        # Background
+        gradient = QLinearGradient(0, 0, 0, rect.height())
+        gradient.setColorAt(0, QColor(80, 250, 123, 50))
+        gradient.setColorAt(1, QColor(80, 250, 123, 30))
+
+        path = QPainterPath()
+        path.addRoundedRect(rect, 8, 8)
+        painter.fillPath(path, QBrush(gradient))
+
+        # Border
+        painter.setPen(QPen(QColor("#50fa7b"), 1.5))
+        painter.drawPath(path)
+
 
 class ArrayCellWidget(GraphicsObjectWidget):
     def __init__(self, index: int, value: Any, parent=None):
         super().__init__(parent)
         self.index = index
         self.value = value
-        self._width = 0
+        self._width = 50
         self._height = 35
+
         self.value_text = QGraphicsTextItem(str(value), self)
         self.value_text.setFont(QFont(FONT_FAMILY, 10, QFont.Bold))
         self.value_text.setDefaultTextColor(QColor("white"))
-        self.set_custom_width(30)
+
+        self._update_text_position()
 
     def set_custom_width(self, width):
         self._width = max(30, width)
@@ -74,6 +164,15 @@ class ArrayCellWidget(GraphicsObjectWidget):
 
     def boundingRect(self):
         return QRectF(0, 0, self._width, self._height)
+
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.boundingRect()
+
+        # Cell background
+        painter.setBrush(QColor("#50fa7b").darker(150))
+        painter.setPen(QPen(QColor("#50fa7b"), 1))
+        painter.drawRoundedRect(rect, 3, 3)
 
 
 
@@ -434,6 +533,38 @@ class TreeWidget(GraphicsObjectWidget):
         if self.tree_data:
             self._create_tree_nodes()
         self._update_layout()
+
+    def update_tree(self, new_tree_data: Dict):
+        """Update tree with new data and proper layout"""
+        self.tree_data = new_tree_data or {}
+
+        # Clear existing nodes and connections
+        for node_widget in self.node_widgets.values():
+            if node_widget.scene():
+                node_widget.scene().removeItem(node_widget)
+        for connection in self.connection_lines:
+            if connection.scene():
+                connection.scene().removeItem(connection)
+
+        self.node_widgets.clear()
+        self.connection_lines.clear()
+
+        if self.tree_data:
+            self._create_tree_nodes()
+        self._update_layout()
+
+    def highlight_path(self, path: List[Any]):
+        """Highlight a path through the tree (for traversal visualization)"""
+        # This can be used to show tree traversal
+        for node_id, widget in self.node_widgets.items():
+            widget.setGraphicsEffect(None)  # Clear previous highlights
+
+        # Highlight nodes in path
+        for value in path:
+            for node_id, widget in self.node_widgets.items():
+                if widget.value == value:
+                    widget.highlight(QColor("#50fa7b"))
+                    break
 
     def _create_tree_nodes(self):
         """Create tree nodes recursively"""
