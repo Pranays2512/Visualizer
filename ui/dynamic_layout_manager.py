@@ -2,485 +2,234 @@ import math
 import random
 import time
 from typing import Any, List, Optional, Tuple
-
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 
-USER_THEME = {
-    "font_family": "Courier New",
-    "font_size": 12,
-    "color_high_contrast": False,
-}
-def get_theme_color(name):
-    if USER_THEME.get("color_high_contrast"):
-        colors = {
-            "background": QColor("#0a0a0a"),
-            "highlight": QColor("#ffff00"),
-        }
-        return colors.get(name, QColor("#ffffff"))
-    else:
-        colors = {
-            "background": QColor("#282a36"),
-            "highlight": QColor("#50fa7b"),
-        }
-        return colors.get(name, QColor("#ffffff"))
-
-
+# Configuration
+USER_THEME = {"font_family": "Courier New", "font_size": 12, "color_high_contrast": False}
 FONT_FAMILY, ANIMATION_DURATION = USER_THEME["font_family"], 600
 GLOW_COLOR, PINK_COLOR, LINE_COLOR = QColor("#50fa7b"), QColor("#ff79c6"), QColor("#bd93f9")
-WALL_COLOR, SCOPE_COLOR, BACKGROUND_COLOR = QColor("#44475a"), QColor("#f1fa8c"), get_theme_color("background")
+WALL_COLOR, SCOPE_COLOR = QColor("#44475a"), QColor("#f1fa8c")
+BACKGROUND_COLOR = QColor("#0a0a0a" if USER_THEME["color_high_contrast"] else "#282a36")
 GRID_COLOR = QColor("#343746")
 MARGIN, H_SPACING, V_SPACING = 25, 20, 20
 MIN_CANVAS_WIDTH, MIN_CANVAS_HEIGHT = 400, 450
+HOVER_SCALE = 1.05
+
+
+def get_theme_color(name):
+    colors = {"background": QColor("#0a0a0a"), "highlight": QColor("#ffff00")} if USER_THEME[
+        "color_high_contrast"] else {"background": QColor("#282a36"), "highlight": QColor("#50fa7b")}
+    return colors.get(name, QColor("#ffffff"))
+
 
 class SpringPhysics:
-    """Physics-based spring system for natural animations"""
-
     def __init__(self, mass=1.0, stiffness=200.0, damping=20.0):
-        self.mass = mass
-        self.stiffness = stiffness
-        self.damping = damping
-        self.position = QPointF(0, 0)
-        self.velocity = QPointF(0, 0)
-        self.target = QPointF(0, 0)
+        self.mass, self.stiffness, self.damping = mass, stiffness, damping
+        self.position = self.velocity = self.target = QPointF(0, 0)
         self.settled_threshold = 0.1
 
     def update(self, dt: float, target_pos: QPointF) -> Tuple[QPointF, bool]:
-        """Update spring physics and return new position and settled state"""
         self.target = target_pos
-
-        # Calculate displacement from target
         displacement = self.position - self.target
-
-        # Spring force: F = -k * displacement
-        spring_force = -self.stiffness * displacement
-
-        # Damping force: F = -c * velocity
-        damping_force = -self.damping * self.velocity
-
-        # Total force
-        total_force = spring_force + damping_force
-
-        # Acceleration: a = F/m
-        acceleration = total_force / self.mass
-
-        # Update velocity and position
-        self.velocity += acceleration * dt
+        force = (-self.stiffness * displacement - self.damping * self.velocity) / self.mass
+        self.velocity += force * dt
         self.position += self.velocity * dt
 
-        # Check if settled (small displacement and velocity)
-        displacement_magnitude = math.sqrt(displacement.x() ** 2 + displacement.y() ** 2)
-        velocity_magnitude = math.sqrt(self.velocity.x() ** 2 + self.velocity.y() ** 2)
-
-        settled = (displacement_magnitude < self.settled_threshold and
-                   velocity_magnitude < self.settled_threshold)
-
+        settled = (math.sqrt(displacement.x() ** 2 + displacement.y() ** 2) < self.settled_threshold and
+                   math.sqrt(self.velocity.x() ** 2 + self.velocity.y() ** 2) < self.settled_threshold)
         return QPointF(self.position), settled
 
-    def set_position(self, pos: QPointF):
-        """Set current position without affecting velocity"""
-        self.position = pos
-
     def set_immediate(self, pos: QPointF):
-        """Set position and target immediately, stopping all motion"""
-        self.position = pos
-        self.target = pos
+        self.position = self.target = pos
         self.velocity = QPointF(0, 0)
 
 
-class AdvancedEasing:
-    """Collection of advanced easing functions for natural animations"""
-
-    @staticmethod
-    def anticipate_overshoot(progress: float, anticipate: float = 0.2, overshoot: float = 1.7) -> float:
-        """Easing with anticipation and overshoot for natural feel"""
-        if progress < anticipate:
-            # Anticipation phase (slight backward movement)
-            t = progress / anticipate
-            return -anticipate * t * t
-        else:
-            # Main movement with overshoot
-            t = (progress - anticipate) / (1 - anticipate)
-            return anticipate + (1 + overshoot) * pow(t, 3) - overshoot * pow(t, 2)
-
-    @staticmethod
-    def breathing(progress: float, frequency: float = 2.0, amplitude: float = 0.05) -> float:
-        """Subtle breathing effect for idle animations"""
-        return 1.0 + amplitude * math.sin(progress * frequency * 2 * math.pi)
-
-    @staticmethod
-    def elastic_out_enhanced(progress: float) -> float:
-        """Enhanced elastic easing with better parameters"""
-        if progress == 0 or progress == 1:
-            return progress
-        p = 0.4
-        s = p / 4
-        return math.pow(2, -8 * progress) * math.sin((progress - s) * (2 * math.pi) / p) + 1
-
-
 class AnimationContext:
-    """Manages animation timing and context for different interaction types"""
-
     def __init__(self):
         self.current_context = "idle"
-        self.animation_queue = []
-        self.context_multipliers = {
-            "creating": 1.3,
-            "updating": 0.7,
-            "removing": 1.1,
-            "focusing": 0.9,
-            "idle": 1.0
-        }
+        self.context_multipliers = {"creating": 1.3, "updating": 0.7, "removing": 1.1, "focusing": 0.9, "idle": 1.0}
 
-    def set_context(self, context_type: str):
-        """Set current animation context"""
-        self.current_context = context_type
+    def set_context(self, context_type: str): self.current_context = context_type
 
     def get_timing_for_context(self, base_duration: int, distance: float = 0) -> int:
-        """Calculate contextual timing with distance factor"""
-        context_multiplier = self.context_multipliers.get(self.current_context, 1.0)
-
-        # Distance-based timing adjustment
-        distance_factor = 1.0
-        if distance > 0:
-            distance_factor = min(1.0 + distance / 300.0, 1.8)
-
-        return int(base_duration * context_multiplier * distance_factor)
-
+        multiplier = self.context_multipliers.get(self.current_context, 1.0)
+        distance_factor = min(1.0 + distance / 300.0, 1.8) if distance > 0 else 1.0
+        return int(base_duration * multiplier * distance_factor)
 
 
 class ImportanceTracker:
-    """Tracks item importance based on interactions for visual hierarchy"""
-
     def __init__(self):
-        self.item_scores = {}
-        self.interaction_history = []
-        self.decay_rate = 0.1  # How fast importance decays
+        self.item_scores, self.interaction_history, self.decay_rate = {}, [], 0.1
 
     def update_importance(self, item, interaction_type: str):
-        """Update importance score based on interaction"""
+        weights = {"hover": 0.1, "click": 0.3, "update": 0.5, "focus": 0.7, "error": 1.0}
+        weight = weights.get(interaction_type, 0.1)
         current_time = time.time()
-
-        # Weight different interaction types
-        interaction_weights = {
-            "hover": 0.1,
-            "click": 0.3,
-            "update": 0.5,
-            "focus": 0.7,
-            "error": 1.0
-        }
-
-        weight = interaction_weights.get(interaction_type, 0.1)
-
-        # Add to history
         self.interaction_history.append((item, interaction_type, current_time, weight))
 
-        # Calculate importance score
-        score = self._calculate_importance_score(item, current_time)
-        self.item_scores[item] = score
-
-        return score
-
-    def _calculate_importance_score(self, item, current_time: float) -> float:
-        """Calculate importance score with time decay"""
-        score = 0.0
-
-        for hist_item, interaction_type, timestamp, weight in self.interaction_history:
-            if hist_item == item:
-                # Apply time decay
-                time_diff = current_time - timestamp
-                decay = math.exp(-self.decay_rate * time_diff)
-                score += weight * decay
-
-        return min(score, 2.0)  # Cap at 2.0
+        score = sum(w * math.exp(-self.decay_rate * (current_time - t))
+                    for i, _, t, w in self.interaction_history if i == item)
+        self.item_scores[item] = min(score, 2.0)
+        return self.item_scores[item]
 
     def get_importance(self, item) -> float:
-        """Get current importance score for item"""
-        current_time = time.time()
-        if item in self.item_scores:
-            # Apply decay to stored score
-            last_score = self.item_scores[item]
-            # Simple decay approximation
-            return max(0.0, last_score * 0.95)
-        return 0.0
+        return max(0.0, self.item_scores.get(item, 0.0) * 0.95)
 
 
 class SnapZone(QGraphicsObject):
-    """Magnetic snap zone for intuitive item placement"""
-
     def __init__(self, target_pos: QPointF, radius: float = 40, parent=None):
         super().__init__(parent)
-        self.target_pos = target_pos
-        self.radius = radius
-        self.active = False
+        self.target_pos, self.radius, self.active = target_pos, radius, False
         self.attraction_strength = 0.3
 
     def check_magnetic_pull(self, item_pos: QPointF) -> QPointF:
-        """Calculate magnetic pull effect on item position"""
         distance_vec = self.target_pos - item_pos
         distance = math.sqrt(distance_vec.x() ** 2 + distance_vec.y() ** 2)
 
         if distance < self.radius and distance > 1:
-            # Calculate pull strength (stronger closer to center)
             pull_factor = (1.0 - distance / self.radius) * self.attraction_strength
             return item_pos + distance_vec * pull_factor
         elif distance <= 1:
             return self.target_pos
-
         return item_pos
 
     def set_active(self, active: bool):
-        """Set snap zone visibility"""
         self.active = active
         self.update()
 
     def boundingRect(self) -> QRectF:
-        return QRectF(
-            self.target_pos.x() - self.radius,
-            self.target_pos.y() - self.radius,
-            self.radius * 2,
-            self.radius * 2
-        )
+        return QRectF(self.target_pos.x() - self.radius, self.target_pos.y() - self.radius,
+                      self.radius * 2, self.radius * 2)
 
     def paint(self, painter: QPainter, option, widget=None):
-        if not self.active:
-            return
-
+        if not self.active: return
         painter.setRenderHint(QPainter.Antialiasing)
-
-        # Draw subtle snap zone indication
-        center = self.target_pos
-
-        # Outer ring
         painter.setPen(QPen(QColor("#50fa7b", 60), 2, Qt.DashLine))
         painter.setBrush(Qt.NoBrush)
-        painter.drawEllipse(center, self.radius, self.radius)
-
-        # Inner target
+        painter.drawEllipse(self.target_pos, self.radius, self.radius)
         painter.setPen(QPen(QColor("#50fa7b", 120), 1))
         painter.setBrush(QColor("#50fa7b", 30))
-        painter.drawEllipse(center, 8, 8)
+        painter.drawEllipse(self.target_pos, 8, 8)
 
 
 class LayoutPredictor:
-    """Predicts optimal positions for new items"""
-
     def __init__(self, canvas):
-        self.canvas = canvas
-        self.predicted_layouts = {}
-        self.snap_zones = []
+        self.canvas, self.snap_zones = canvas, []
 
     def predict_next_position(self, item_type: str) -> QPointF:
-        """Predict where next item should be placed"""
         visible_items = [item for item in self.canvas.items if item.isVisible() and not item.parentItem()]
+        if not visible_items: return QPointF(MARGIN, MARGIN)
 
-        if not visible_items:
-            return QPointF(MARGIN, MARGIN)
-
-        # Analyze current layout pattern
-        if item_type == "variable":
-            return self._predict_variable_position(visible_items)
-        elif item_type == "print":
-            return self._predict_print_position(visible_items)
-        elif item_type == "scope":
-            return self._predict_scope_position(visible_items)
-
-        return self._predict_generic_position(visible_items)
+        return {
+            "variable": self._predict_variable_position,
+            "print": self._predict_print_position,
+            "scope": self._predict_scope_position
+        }.get(item_type, self._predict_generic_position)(visible_items)
 
     def _predict_variable_position(self, existing_items) -> QPointF:
-        """Predict position for variable items with better column management"""
         variables = [item for item in existing_items if isinstance(item, SmartVariableWidget)]
+        if not variables: return QPointF(MARGIN, MARGIN)
 
-        if not variables:
-            return QPointF(MARGIN, MARGIN)
-
-        # Find the rightmost column position
-        canvas_width = self.canvas.width() - MARGIN
-        current_column_x = MARGIN
-        current_column_items = []
-
-        # Group variables by column (items with similar x positions)
+        # Group by columns
         columns = {}
         for var in variables:
             x_pos = var.pos().x()
-            # Find existing column or create new one
-            column_key = None
-            for existing_x in columns.keys():
-                if abs(x_pos - existing_x) < 50:  # Same column if within 50px
-                    column_key = existing_x
-                    break
+            column_key = next((x for x in columns.keys() if abs(x_pos - x) < 50), x_pos)
+            columns.setdefault(column_key, []).append(var)
 
-            if column_key is None:
-                column_key = x_pos
-                columns[column_key] = []
+        # Try existing columns first
+        for col_x, col_items in columns.items():
+            if len(col_items) < 5:
+                bottom_y = max(item.pos().y() + item.boundingRect().height() for item in col_items)
+                if bottom_y + V_SPACING + 50 < self.canvas.viewport().height() - MARGIN:
+                    return QPointF(col_x, bottom_y + V_SPACING)
 
-            columns[column_key].append(var)
+        # New column if space available
+        rightmost = max(columns.keys())
+        width = max(item.boundingRect().width() for item in columns[rightmost])
+        new_x = rightmost + width + H_SPACING
 
-        # Find column with most space or create new column
-        best_column_x = MARGIN
-        best_y = MARGIN
+        if new_x + 150 < self.canvas.width():
+            return QPointF(new_x, MARGIN)
 
-        if columns:
-            # Try to add to existing column with space
-            for col_x, col_items in columns.items():
-                col_bottom = max(item.pos().y() + item.boundingRect().height() for item in col_items)
-                col_right = col_x + max(item.boundingRect().width() for item in col_items)
-
-                # Check if we can fit in this column without exceeding canvas width
-                if col_right + H_SPACING < canvas_width - MARGIN:
-                    return QPointF(col_x, col_bottom + V_SPACING)
-
-            # First, try to fill existing columns vertically
-            viewport_height = self.canvas.viewport().height()
-            for col_x, col_items in columns.items():
-                if len(col_items) < 5:  # Max 5 items per column
-                    bottom_y = max(item.pos().y() + item.boundingRect().height() for item in col_items)
-                    if bottom_y + V_SPACING + 50 < viewport_height - MARGIN:  # 50 = estimated item height
-                        return QPointF(col_x, bottom_y + V_SPACING)
-
-            # Create new column only if vertical space is exhausted
-            rightmost_column = max(columns.keys())
-            rightmost_items = columns[rightmost_column]
-            rightmost_width = max(item.boundingRect().width() for item in rightmost_items)
-
-            new_column_x = rightmost_column + rightmost_width + H_SPACING
-
-            # Only create new column if it fits, otherwise stack in existing column
-            if new_column_x + 150 < canvas_width:  # Assume average widget width
-                return QPointF(new_column_x, MARGIN)
-            else:
-                # Stack in the shortest column
-                shortest_column_x = min(columns.keys(),
-                                        key=lambda x: max(item.pos().y() + item.boundingRect().height()
-                                                          for item in columns[x]))
-                shortest_bottom = max(item.pos().y() + item.boundingRect().height()
-                                      for item in columns[shortest_column_x])
-                return QPointF(shortest_column_x, shortest_bottom + V_SPACING)
-
-        return QPointF(MARGIN, MARGIN)
-
-    def _get_column_height(self, col_x: float, items: List) -> float:
-        """Get the current height used in a column"""
-        column_items = [item for item in items if abs(item.pos().x() - col_x) < 50]
-        if not column_items:
-            return 0
-        return max(item.pos().y() + item.boundingRect().height() for item in column_items)
+        # Stack in shortest column
+        shortest_x = min(columns.keys(), key=lambda x: max(i.pos().y() + i.boundingRect().height() for i in columns[x]))
+        bottom = max(i.pos().y() + i.boundingRect().height() for i in columns[shortest_x])
+        return QPointF(shortest_x, bottom + V_SPACING)
 
     def _predict_print_position(self, existing_items) -> QPointF:
-        """Predict position for print blocks"""
         prints = [item for item in existing_items if isinstance(item, SmartPrintBlock)]
-
         if prints:
-            # Place in next column or below
-            rightmost_x = max(item.pos().x() + item.boundingRect().width() for item in existing_items)
-            return QPointF(rightmost_x + H_SPACING, MARGIN)
+            rightmost = max(item.pos().x() + item.boundingRect().width() for item in existing_items)
+            return QPointF(rightmost + H_SPACING, MARGIN)
 
-        # Place to the right of variables
         variables = [item for item in existing_items if isinstance(item, SmartVariableWidget)]
         if variables:
-            max_var_right = max(var.pos().x() + var.boundingRect().width() for var in variables)
-            return QPointF(max_var_right + H_SPACING, MARGIN)
+            max_right = max(var.pos().x() + var.boundingRect().width() for var in variables)
+            return QPointF(max_right + H_SPACING, MARGIN)
 
         return QPointF(MARGIN, MARGIN)
 
     def _predict_scope_position(self, existing_items) -> QPointF:
-        """Predict position for scope widgets"""
-        # Scopes typically go in their own space
         if existing_items:
-            bottom_most = max(item.pos().y() + item.boundingRect().height() for item in existing_items)
-            return QPointF(MARGIN, bottom_most + V_SPACING * 2)
-
+            bottom = max(item.pos().y() + item.boundingRect().height() for item in existing_items)
+            return QPointF(MARGIN, bottom + V_SPACING * 2)
         return QPointF(MARGIN, MARGIN)
 
     def _predict_generic_position(self, existing_items) -> QPointF:
-        """Generic position prediction"""
         if existing_items:
             rightmost = max(item.pos().x() + item.boundingRect().width() for item in existing_items)
             return QPointF(rightmost + H_SPACING, MARGIN)
-
         return QPointF(MARGIN, MARGIN)
 
     def create_snap_zones(self, item_type: str):
-        """Create snap zones for predicted positions"""
-        predicted_pos = self.predict_next_position(item_type)
-
-        # Create snap zone at predicted position
-        snap_zone = SnapZone(predicted_pos)
+        snap_zone = SnapZone(self.predict_next_position(item_type))
         self.snap_zones.append(snap_zone)
         self.canvas.scene.addItem(snap_zone)
         snap_zone.set_active(True)
-
-        # Auto-remove after timeout
         QTimer.singleShot(3000, lambda: self._remove_snap_zone(snap_zone))
-
         return snap_zone
 
-    def _remove_snap_zone(self, snap_zone: SnapZone):
-        """Remove snap zone"""
-        if snap_zone in self.snap_zones:
-            self.snap_zones.remove(snap_zone)
-        if snap_zone.scene():
-            snap_zone.scene().removeItem(snap_zone)
+    def _remove_snap_zone(self, snap_zone):
+        if snap_zone in self.snap_zones: self.snap_zones.remove(snap_zone)
+        if snap_zone.scene(): snap_zone.scene().removeItem(snap_zone)
 
 
 class EnhancedParticleEffect(QGraphicsObject):
-    """Enhanced particle system with more natural physics"""
-
     def __init__(self, start_pos: QPointF, color: QColor, particle_count: int = 12, parent=None):
         super().__init__(parent)
-        self.particles = []
-        self.start_pos = start_pos
-        self.color = color
-        self.lifetime = 0
-        self.max_lifetime = 80
+        self.particles, self.start_pos, self.color = [], start_pos, color
+        self.lifetime, self.max_lifetime = 0, 80
 
-        # Create particles with varied properties
         for _ in range(particle_count):
-            angle = random.uniform(0, 2 * math.pi)
-            speed = random.uniform(1.5, 4.0)
-            size = random.uniform(2, 5)
-
+            angle, speed, size = random.uniform(0, 2 * math.pi), random.uniform(1.5, 4.0), random.uniform(2, 5)
             self.particles.append({
-                'x': start_pos.x(),
-                'y': start_pos.y(),
-                'vx': math.cos(angle) * speed,
-                'vy': math.sin(angle) * speed,
-                'life': random.uniform(0.9, 1.0),
-                'size': size,
-                'rotation': random.uniform(0, 360),
-                'angular_velocity': random.uniform(-5, 5)
+                'x': start_pos.x(), 'y': start_pos.y(),
+                'vx': math.cos(angle) * speed, 'vy': math.sin(angle) * speed,
+                'life': random.uniform(0.9, 1.0), 'size': size,
+                'rotation': random.uniform(0, 360), 'angular_velocity': random.uniform(-5, 5)
             })
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_particles)
-        self.timer.start(16)  # 60 FPS
+        self.timer.start(16)
 
     def update_particles(self):
-        """Update particle physics"""
         self.lifetime += 1
-
-        for particle in self.particles:
-            # Update position
-            particle['x'] += particle['vx']
-            particle['y'] += particle['vy']
-
-            # Apply gravity and air resistance
-            particle['vy'] += 0.15  # Gravity
-            particle['vx'] *= 0.99  # Air resistance
-            particle['vy'] *= 0.99
-
-            # Update rotation
-            particle['rotation'] += particle['angular_velocity']
-
-            # Fade out
-            particle['life'] *= 0.97
+        for p in self.particles:
+            p['x'] += p['vx']
+            p['y'] += p['vy']
+            p['vy'] += 0.15
+            p['vx'] *= 0.99
+            p['vy'] *= 0.99
+            p['rotation'] += p['angular_velocity']
+            p['life'] *= 0.97
 
         if self.lifetime > self.max_lifetime:
             self.timer.stop()
-            if self.scene():
-                self.scene().removeItem(self)
-
+            if self.scene(): self.scene().removeItem(self)
         self.update()
 
     def boundingRect(self) -> QRectF:
@@ -488,79 +237,53 @@ class EnhancedParticleEffect(QGraphicsObject):
 
     def paint(self, painter: QPainter, option, widget=None):
         painter.setRenderHint(QPainter.Antialiasing)
-
-        for particle in self.particles:
-            if particle['life'] > 0:
-                # Set up particle rendering
-                opacity = int(particle['life'] * 255)
+        for p in self.particles:
+            if p['life'] > 0:
                 color = QColor(self.color)
-                color.setAlpha(opacity)
-
+                color.setAlpha(int(p['life'] * 255))
                 painter.save()
-                painter.translate(particle['x'], particle['y'])
-                painter.rotate(particle['rotation'])
-
-                # Draw particle with glow effect
-                glow = QRadialGradient(0, 0, particle['size'])
+                painter.translate(p['x'], p['y'])
+                painter.rotate(p['rotation'])
+                glow = QRadialGradient(0, 0, p['size'])
                 glow.setColorAt(0, color)
                 glow.setColorAt(1, QColor(color.red(), color.green(), color.blue(), 0))
-
                 painter.setBrush(glow)
-                painter.setPen(QPen(Qt.NoPen))
-
-                # FIX: Use QRectF for float values
-                size = particle['size']
-                rect = QRectF(-size / 2, -size / 2, size, size)
-                painter.drawEllipse(rect)
-
+                painter.setPen(Qt.NoPen)
+                painter.drawEllipse(QRectF(-p['size'] / 2, -p['size'] / 2, p['size'], p['size']))
                 painter.restore()
 
 
+# Global instances
 animation_context = AnimationContext()
 importance_tracker = ImportanceTracker()
 
 
 class SmoothAnimation(QPropertyAnimation):
-    """Enhanced animation class with contextual timing"""
-
     def __init__(self, target, property_name, parent=None, easing_type=None):
         super().__init__(target, property_name, parent)
 
-        # Get contextual duration
-        base_duration = ANIMATION_DURATION
+        distance = 0
         if hasattr(target, 'pos') and hasattr(target, 'previous_pos'):
             try:
                 distance = (target.pos() - target.previous_pos).manhattanLength()
             except:
-                distance = 0
-        else:
-            distance = 0
+                pass
 
-        duration = animation_context.get_timing_for_context(base_duration, distance)
+        duration = animation_context.get_timing_for_context(ANIMATION_DURATION, distance)
         self.setDuration(duration)
-
-        # Set enhanced easing
-        if easing_type:
-            self.setEasingCurve(easing_type)
-        else:
-            self.setEasingCurve(QEasingCurve.OutCubic)
+        self.setEasingCurve(easing_type or QEasingCurve.OutCubic)
 
     def set_anticipation_effect(self):
-        """Apply anticipation easing"""
         self.setEasingCurve(QEasingCurve.OutBack)
 
     def set_elastic_effect(self):
-        """Apply enhanced elastic easing"""
         self.setEasingCurve(QEasingCurve.OutElastic)
 
     def set_bounce_effect(self):
-        """Apply bounce easing"""
         self.setEasingCurve(QEasingCurve.OutBounce)
 
 
 class GraphicsObjectWidget(QGraphicsObject):
-    """Enhanced base class with physics-based animations and importance tracking"""
-
     positionChanged = pyqtSignal()
     hovered = pyqtSignal(bool)
 
@@ -571,43 +294,24 @@ class GraphicsObjectWidget(QGraphicsObject):
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
         self.setAcceptHoverEvents(True)
 
-        # Physics-based movement
+        # Physics and animations
         self.physics = SpringPhysics(mass=0.8, stiffness=180, damping=15)
         self.physics_timer = QTimer(self)
         self.physics_timer.timeout.connect(self._update_physics)
-        self.target_pos = self.pos()
-        self.previous_pos = self.pos()
+        self.target_pos = self.previous_pos = self.pos()
 
-        # Enhanced animations
+        # Animation setup
         self.opacity_animation = SmoothAnimation(self, b"opacity")
         self.scale_animation = SmoothAnimation(self, b'scale')
         self.rotation_animation = SmoothAnimation(self, b'rotation')
-
-        # Hover animations
         self.hover_scale_animation = SmoothAnimation(self, b'scale')
         self.hover_scale_animation.setDuration(200)
 
-        # Importance-based scaling
-        self.importance_animation = SmoothAnimation(self, b'scale')
-        self.importance_animation.setDuration(400)
-
-        # Breathing animation for idle state
-        self.breathing_animation = QPropertyAnimation(self, b'scale')
-        self.breathing_animation.setDuration(3000)
-        self.breathing_animation.setLoopCount(-1)  # Infinite
-        self.breathing_timer = QTimer()
-
-
-        # Animation groups
         self.entrance_group = QParallelAnimationGroup()
         self.entrance_group.addAnimation(self.opacity_animation)
         self.entrance_group.addAnimation(self.scale_animation)
 
-        # State tracking
-        self.is_hovering = False
-        self.current_importance = 0.0
-
-        # Connect signals
+        self.is_hovering = self.current_importance = False
         self.hovered.connect(self._on_hover_changed)
 
     def hoverEnterEvent(self, event):
@@ -626,63 +330,34 @@ class GraphicsObjectWidget(QGraphicsObject):
             self._start_hover_animation(False)
 
     def _on_hover_changed(self, hovering: bool):
-        """Handle hover state changes"""
-        if hovering:
-            self.breathing_timer.stop()
-            self.breathing_animation.stop()
-
+        pass
 
     def _start_hover_animation(self, entering: bool):
-        """Enhanced hover animation with importance consideration"""
-        base_scale = 1.0 + (self.current_importance * 0.1)  # Importance affects base scale
+        base_scale = 1.0 + (self.current_importance * 0.1)
         target_scale = (HOVER_SCALE + self.current_importance * 0.05) if entering else base_scale
-
         self.hover_scale_animation.setStartValue(self.scale())
         self.hover_scale_animation.setEndValue(target_scale)
-        self.hover_scale_animation.set_anticipation_effect() if entering else None
+        if entering: self.hover_scale_animation.set_anticipation_effect()
         self.hover_scale_animation.start()
 
-    def _start_breathing(self):
-        """Start subtle breathing animation for idle state"""
-        if not self.is_hovering and self.isVisible():
-            current_scale = self.scale()
-            breath_amount = 0.02 + (self.current_importance * 0.01)
-
-            self.breathing_animation.setStartValue(current_scale)
-            self.breathing_animation.setEndValue(current_scale + breath_amount)
-            self.breathing_animation.setEasingCurve(QEasingCurve.InOutSine)
-            self.breathing_animation.start()
-
     def _update_physics(self):
-        """Update physics-based position"""
         new_pos, settled = self.physics.update(0.016, self.target_pos)
         self.setPos(new_pos)
-
         if settled:
             self.physics_timer.stop()
             self.positionChanged.emit()
 
     def show_animated(self, delay: int = 0):
-        """Enhanced entrance animation with physics"""
-
         def start_animation():
-            # Check if widget still exists
             try:
-                if not self.scene() or not self.isVisible():
-                    return
-
+                if not self.scene() or not self.isVisible(): return
                 animation_context.set_context("creating")
-
-                # Set initial state
                 self.setOpacity(0.0)
                 self.setScale(0.6)
                 self.setRotation(random.uniform(-10, 10))
                 self.show()
-
-                # Physics setup
                 self.physics.set_immediate(self.pos())
 
-                # Configure animations
                 self.opacity_animation.setStartValue(0.0)
                 self.opacity_animation.setEndValue(1.0)
                 self.scale_animation.setStartValue(0.6)
@@ -692,90 +367,59 @@ class GraphicsObjectWidget(QGraphicsObject):
                 self.rotation_animation.setEndValue(0.0)
                 self.rotation_animation.set_anticipation_effect()
 
-                # Start animations
                 self.entrance_group.start()
                 self.rotation_animation.start()
-
-                # Track creation importance
                 importance_tracker.update_importance(self, "focus")
-
             except RuntimeError:
-                # Widget has been deleted, ignore
                 pass
 
-        if delay > 0:
-            QTimer.singleShot(delay, start_animation)
-        else:
-            start_animation()
+        QTimer.singleShot(delay, start_animation) if delay > 0 else start_animation()
 
     def remove_animated(self):
-        """Enhanced removal animation with particles"""
         animation_context.set_context("removing")
-
-        # Stop all ongoing animations
-        self.breathing_timer.stop()
-        self.breathing_animation.stop()
         self.physics_timer.stop()
 
         if self.scene():
-            # Create enhanced particle effect
             particle_effect = EnhancedParticleEffect(self.scenePos(), GLOW_COLOR, 15)
             self.scene().addItem(particle_effect)
 
-        # Exit animation group
         exit_group = QParallelAnimationGroup()
-
         opacity_anim = SmoothAnimation(self, b'opacity')
         opacity_anim.setEndValue(0.0)
-
         scale_anim = SmoothAnimation(self, b'scale')
         scale_anim.setEndValue(0.2)
         scale_anim.set_anticipation_effect()
-
         rotation_anim = SmoothAnimation(self, b'rotation')
         rotation_anim.setEndValue(random.uniform(15, 25))
 
         exit_group.addAnimation(opacity_anim)
         exit_group.addAnimation(scale_anim)
         exit_group.addAnimation(rotation_anim)
-
         exit_group.finished.connect(self.hide)
         exit_group.start()
 
     def move_to_position(self, end_pos: QPointF, delay: int = 0):
-        """Physics-based movement to a new position"""
-
         def start_move():
             animation_context.set_context("updating")
             self.previous_pos = self.pos()
             self.target_pos = end_pos
-
-            # Ensure the physics timer is running for the movement
             if not self.physics_timer.isActive():
-                self.physics_timer.start(16)  # ~60 FPS update rate
+                self.physics_timer.start(16)
 
-        if delay > 0:
-            QTimer.singleShot(delay, start_move)
-        else:
-            start_move()
+        QTimer.singleShot(delay, start_move) if delay > 0 else start_move()
 
 
 class SmartVariableWidget(GraphicsObjectWidget):
-    """A widget to represent a variable with its name and value"""
     def __init__(self, name: str, value: Any, parent=None):
         super().__init__(parent)
-        self.name = name
-        self.value = value
+        self.name, self.value = name, value
         self._font = QFont(FONT_FAMILY, 10)
         self._update_size()
 
     def _update_size(self):
-        font_metrics = QFontMetrics(self._font)
-        name_width = font_metrics.width(self.name)
-        value_width = font_metrics.width(str(self.value))
-        content_width = max(name_width, value_width)
-        # Reduced margin and min-width
-        self.width = max(50, content_width + 24)  # shrinks more for short vars
+        fm = QFontMetrics(self._font)
+        content_width = max(fm.width(self.name), fm.width(str(self.value)))
+        self.width = max(50, content_width + 24)
         self.height = 40
 
     def boundingRect(self) -> QRectF:
@@ -786,21 +430,19 @@ class SmartVariableWidget(GraphicsObjectWidget):
         path = QPainterPath()
         path.addRoundedRect(self.boundingRect(), 8, 8)
         painter.fillPath(path, QBrush(WALL_COLOR))
+
         painter.setPen(PINK_COLOR)
-        font = QFont(FONT_FAMILY, 10, QFont.Bold)
-        painter.setFont(font)
+        painter.setFont(QFont(FONT_FAMILY, 10, QFont.Bold))
         painter.drawText(QRectF(10, 5, self.width - 20, 20), Qt.AlignLeft, self.name)
+
         painter.setPen(GLOW_COLOR)
-        font.setBold(False)
-        painter.setFont(font)
+        painter.setFont(QFont(FONT_FAMILY, 10))
         painter.drawText(QRectF(10, 22, self.width - 20, 20), Qt.AlignLeft, str(self.value))
 
     def update_value(self, new_value: Any):
-        if self.value == new_value:
-            return
+        if self.value == new_value: return
         self.value = new_value
         self._update_size()
-        # Animate the update
         self.setScale(1.15)
         anim = SmoothAnimation(self, b'scale')
         anim.setStartValue(1.15)
@@ -812,25 +454,18 @@ class SmartVariableWidget(GraphicsObjectWidget):
         self.update()
         if self.parentItem() and hasattr(self.parentItem(), "_update_layout"):
             self.parentItem()._update_layout()
-HOVER_SCALE = 1.05
+
 
 class SmartPrintBlock(GraphicsObjectWidget):
-    """A widget to represent a print statement output"""
-
     def __init__(self, expression: str, value: str, parent=None):
         super().__init__(parent)
-        self.expression = expression
-        self.value = value
-
-        # More accurate width calculation
-        font_metrics = QFontMetrics(QFont(FONT_FAMILY, 9))
-        text = f'{self.expression} -> {self.value}'
-        text_width = font_metrics.width(text)
-        self.width = max(150, text_width + 30)  # Reduced minimum from 200
+        self.expression, self.value = expression, value
+        fm = QFontMetrics(QFont(FONT_FAMILY, 9))
+        text_width = fm.width(f'{expression} -> {value}')
+        self.width = max(150, text_width + 30)
         self.height = 40
 
-    def boundingRect(self) -> QRectF:
-        return QRectF(0, 0, self.width, self.height)
+    def boundingRect(self) -> QRectF: return QRectF(0, 0, self.width, self.height)
 
     def paint(self, painter: QPainter, option, widget=None):
         painter.setRenderHint(QPainter.Antialiasing)
@@ -839,39 +474,31 @@ class SmartPrintBlock(GraphicsObjectWidget):
         painter.setBrush(QColor(BACKGROUND_COLOR).lighter(120))
         painter.setPen(QPen(LINE_COLOR, 2))
         painter.drawPath(path)
-
         painter.setPen(Qt.white)
         painter.setFont(QFont(FONT_FAMILY, 9))
-        text = f'{self.expression} -> {self.value}'
-        painter.drawText(self.boundingRect().adjusted(10, 5, -10, -5), Qt.AlignVCenter | Qt.AlignLeft, text)
+        painter.drawText(self.boundingRect().adjusted(10, 5, -10, -5),
+                         Qt.AlignVCenter | Qt.AlignLeft, f'{self.expression} -> {self.value}')
 
 
 class ScopeWidget(GraphicsObjectWidget):
-    """A widget to represent a scope (e.g., a function call) that contains variables."""
-
     def __init__(self, name: str, parent=None):
         super().__init__(parent)
-        self.name = name
-        self._items = []
-        self._width = 250
-        self._height = 80
+        self.name, self._items = name, []
+        self._width, self._height = 250, 80
 
         self.name_text = QGraphicsTextItem(name, self)
         self.name_text.setFont(QFont(FONT_FAMILY, 12, QFont.Bold))
         self.name_text.setDefaultTextColor(SCOPE_COLOR)
         self.name_text.setPos(15, 10)
-        self.setZValue(-1)  # Appear behind variables
-
+        self.setZValue(-1)
         self._update_layout()
 
     def addItem(self, item: QGraphicsItem):
-        """Adds a variable widget to this scope."""
         item.setParentItem(self)
         self._items.append(item)
         self._update_layout()
 
     def _update_layout(self):
-        """Arranges the items vertically within the scope."""
         self.prepareGeometryChange()
         y_offset = self.name_text.boundingRect().height() + 25
         max_item_width = 0
@@ -879,33 +506,25 @@ class ScopeWidget(GraphicsObjectWidget):
         for item in self._items:
             item.setPos(15, y_offset)
             y_offset += item.boundingRect().height() + V_SPACING / 2
-            if item.boundingRect().width() > max_item_width:
-                max_item_width = item.boundingRect().width()
+            max_item_width = max(max_item_width, item.boundingRect().width())
 
-        # Adjust size
         self._height = y_offset
         self._width = max(250, max_item_width + 30)
         self.positionChanged.emit()
         self.update()
 
-    def boundingRect(self) -> QRectF:
-        return QRectF(0, 0, self._width, self._height)
+    def boundingRect(self) -> QRectF: return QRectF(0, 0, self._width, self._height)
 
     def paint(self, painter: QPainter, option, widget=None):
         painter.setRenderHint(QPainter.Antialiasing)
-        rect = self.boundingRect()
         path = QPainterPath()
-        path.addRoundedRect(rect, 10, 10)
-
-        # Border
-        pen = QPen(SCOPE_COLOR, 1.5, Qt.DashLine)
-        painter.setPen(pen)
+        path.addRoundedRect(self.boundingRect(), 10, 10)
+        painter.setPen(QPen(SCOPE_COLOR, 1.5, Qt.DashLine))
         painter.setBrush(QColor(BACKGROUND_COLOR).lighter(110))
         painter.drawPath(path)
 
 
 class DynamicCanvas(QGraphicsView):
-    """The main canvas managing the scene, items, and interactions, now with dynamic rearrangement & adaptivity."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.items = []
@@ -918,31 +537,27 @@ class DynamicCanvas(QGraphicsView):
         self.layout_predictor = LayoutPredictor(self)
         self._install_resize_handler()
         self.execution_state = {
-            'current_line': 0,
-            'in_condition': False,
-            'condition_result': None,
-            'loop_iteration': 0,
-            'execution_path': []
+            'current_line': 0, 'in_condition': False, 'condition_result': None,
+            'loop_iteration': 0, 'execution_path': []
         }
 
     def _install_resize_handler(self):
-        """Make the canvas adapt when its window or parent resizes."""
         self.viewport().installEventFilter(self)
         if hasattr(self.parent(), "resizeEvent"):
             parent_resize = self.parent().resizeEvent
+
             def new_resizeEvent(event):
                 self._auto_resize_canvas()
                 parent_resize(event)
+
             self.parent().resizeEvent = new_resizeEvent
 
     def eventFilter(self, obj, event):
-        """Auto-resize scene on viewport resize."""
         if obj == self.viewport() and event.type() == QEvent.Resize:
             self._auto_resize_canvas()
         return super().eventFilter(obj, event)
 
     def add_item(self, item: QGraphicsItem, item_type: Optional[str] = None):
-        """Enhanced item addition with better type detection"""
         if not item_type:
             if isinstance(item, SmartVariableWidget):
                 item_type = 'variable'
@@ -950,22 +565,18 @@ class DynamicCanvas(QGraphicsView):
                 item_type = 'print'
             elif isinstance(item, ScopeWidget):
                 item_type = 'scope'
-            # ADD: Better detection for advanced widgets
             elif hasattr(item, '__class__') and 'Widget' in item.__class__.__name__:
                 if item.__class__.__name__ in ['ArrayWidget', 'StringWidget', 'TreeWidget', 'ObjectWidget']:
                     item_type = 'data_structure'
                 elif item.__class__.__name__ == 'DictionaryWidget':
                     item_type = 'dictionary'
 
-        # Enhanced positioning logic using existing methods
-        if item_type == 'scope':
-            predicted_pos = self._get_scope_position()
-        elif item_type in ['data_structure', 'dictionary']:
-            predicted_pos = self._get_data_structure_position()
-        elif item_type == 'print':
-            predicted_pos = self._get_next_print_position()  # Use existing method
-        else:
-            predicted_pos = self.layout_predictor.predict_next_position(item_type)
+        predicted_pos = {
+            'scope': self._get_scope_position,
+            'data_structure': self._get_data_structure_position,
+            'dictionary': self._get_data_structure_position,
+            'print': self._get_next_print_position
+        }.get(item_type, lambda: self.layout_predictor.predict_next_position(item_type))()
 
         item.setPos(predicted_pos)
         self.scene.addItem(item)
@@ -974,23 +585,23 @@ class DynamicCanvas(QGraphicsView):
         if hasattr(item, 'show_animated'):
             item.show_animated(delay=len(self.items) * 30)
 
+        if hasattr(item, '__class__') and 'Tree' in item.__class__.__name__:
+            QTimer.singleShot(100, self._auto_resize_canvas_for_tree)
+
         QTimer.singleShot(200, self._auto_resize_canvas)
+
     def _get_scope_position(self):
-        """Get position for scope widgets (stack them vertically on the right)"""
         scopes = [item for item in self.items if isinstance(item, ScopeWidget)]
         if scopes:
             rightmost = max(item.pos().x() + item.boundingRect().width() for item in self.items)
             bottom = max(scope.pos().y() + scope.boundingRect().height() for scope in scopes)
             return QPointF(rightmost + H_SPACING, bottom + V_SPACING)
-        else:
-            # First scope - place on right side
-            if self.items:
-                rightmost = max(item.pos().x() + item.boundingRect().width() for item in self.items)
-                return QPointF(rightmost + H_SPACING * 2, MARGIN)
-            return QPointF(400, MARGIN)
+        elif self.items:
+            rightmost = max(item.pos().x() + item.boundingRect().width() for item in self.items)
+            return QPointF(rightmost + H_SPACING * 2, MARGIN)
+        return QPointF(400, MARGIN)
 
     def _get_data_structure_position(self):
-        """Get position for complex data structures"""
         data_structures = [item for item in self.items
                            if hasattr(item, '__class__') and 'Widget' in item.__class__.__name__
                            and not isinstance(item, (SmartVariableWidget, SmartPrintBlock, ScopeWidget))]
@@ -999,53 +610,36 @@ class DynamicCanvas(QGraphicsView):
             bottom = max(ds.pos().y() + ds.boundingRect().height() for ds in data_structures)
             return QPointF(MARGIN, bottom + V_SPACING * 2)
         else:
-            # Place below variables
             variables = [item for item in self.items if isinstance(item, SmartVariableWidget)]
             if variables:
                 bottom = max(var.pos().y() + var.boundingRect().height() for var in variables)
                 return QPointF(MARGIN, bottom + V_SPACING * 2)
             return QPointF(MARGIN, MARGIN)
-    def _is_simple_sequence(self):
-            """Check if this is simple sequential code (no loops)"""
-            # Don't show arrows if we have many items (likely a loop)
-            return len(self.items) < 10
-
-
-    def _get_next_variable_position(self):
-        """Get position for next variable in a clean column"""
-        variables = [item for item in self.items if isinstance(item, SmartVariableWidget)]
-
-        if not variables:
-            return QPointF(MARGIN, MARGIN)
-
-        # Stack variables vertically in the left column
-        last_var = variables[-1]
-        return QPointF(MARGIN, last_var.pos().y() + last_var.boundingRect().height() + V_SPACING)
 
     def _get_next_print_position(self):
-        """Get position for print blocks in the right area"""
         prints = [item for item in self.items if isinstance(item, SmartPrintBlock)]
-        variables = [item for item in self.items if isinstance(item, SmartVariableWidget)]
-
-        # Position to the right of variables
-        left_column_width = 200  # Fixed width for variable column
+        left_column_width = 200
         start_x = MARGIN + left_column_width + H_SPACING
 
-        if not prints:
-            return QPointF(start_x, MARGIN)
-
-        # Stack prints vertically
+        if not prints: return QPointF(start_x, MARGIN)
         last_print = prints[-1]
         return QPointF(start_x, last_print.pos().y() + last_print.boundingRect().height() + V_SPACING)
+
+    def _auto_resize_canvas_for_tree(self):
+        tree_widgets = [item for item in self.items if hasattr(item, '__class__') and 'Tree' in item.__class__.__name__]
+        if tree_widgets:
+            max_width = max(tw.boundingRect().width() for tw in tree_widgets)
+            max_height = max(tw.boundingRect().height() for tw in tree_widgets)
+            scene_width = max(self.viewport().width(), max_width + 100)
+            scene_height = max(self.viewport().height(), max_height + 100)
+            self.scene.setSceneRect(0, 0, scene_width, scene_height)
+
     def rearrange_all(self):
-        """Rearrange widgets to avoid overlap using a simple grid layout."""
-        if not self.items:
-            return
+        if not self.items: return
         grid_w = int(math.sqrt(len(self.items))) + 1
         grid_spacing_x, grid_spacing_y = 170, 80
         for i, item in enumerate(self.items):
-            grid_x = i % grid_w
-            grid_y = i // grid_w
+            grid_x, grid_y = i % grid_w, i // grid_w
             target_x = MARGIN + grid_x * grid_spacing_x
             target_y = MARGIN + grid_y * grid_spacing_y
             if hasattr(item, 'move_to_position'):
@@ -1054,64 +648,38 @@ class DynamicCanvas(QGraphicsView):
                 item.setPos(target_x, target_y)
         self._auto_resize_canvas()
 
-    def _needs_rearrangement(self):
-        """Detect if widgets overlap/clutter (simple bounding check)."""
-        for i, it1 in enumerate(self.items):
-            rect1 = it1.sceneBoundingRect().adjusted(-5, -5, 5, 5)
-            for j, it2 in enumerate(self.items):
-                if i != j:
-                    rect2 = it2.sceneBoundingRect()
-                    if rect1.intersects(rect2):
-                        return True
-        return False
-
     def _auto_resize_canvas(self):
-        """Automatically resize canvas based on content and viewport."""
-        if not self.items:
-            return
-        max_right = 0
-        max_bottom = 0
+        if not self.items: return
+        max_right = max_bottom = 0
         for item in self.items:
             if hasattr(item, 'pos') and hasattr(item, 'boundingRect'):
-                item_right = item.pos().x() + item.boundingRect().width()
-                item_bottom = item.pos().y() + item.boundingRect().height()
-                max_right = max(max_right, item_right)
-                max_bottom = max(max_bottom, item_bottom)
+                max_right = max(max_right, item.pos().x() + item.boundingRect().width())
+                max_bottom = max(max_bottom, item.pos().y() + item.boundingRect().height())
+
         required_width = max(max_right + MARGIN, MIN_CANVAS_WIDTH)
         required_height = max(max_bottom + MARGIN, MIN_CANVAS_HEIGHT)
-        viewport_width = self.viewport().width()
-        viewport_height = self.viewport().height()
-        scene_width = max(viewport_width, required_width)
-        scene_height = max(viewport_height, required_height)
+        scene_width = max(self.viewport().width(), required_width)
+        scene_height = max(self.viewport().height(), required_height)
         self.scene.setSceneRect(0, 0, scene_width, scene_height)
 
     def ensure_positive_positions(self):
-        """Ensure no items have negative positions."""
-        min_x = float('inf')
-        min_y = float('inf')
+        min_x = min_y = float('inf')
         for item in self.items:
             if hasattr(item, 'pos'):
-                min_x = min(min_x, item.pos().x())
-                min_y = min(min_y, item.pos().y())
-        # Shift everything into visible area if any at negative positions
+                min_x, min_y = min(min_x, item.pos().x()), min(min_y, item.pos().y())
+
         if min_x < MARGIN or min_y < MARGIN:
-            offset_x = max(0, MARGIN - min_x)
-            offset_y = max(0, MARGIN - min_y)
+            offset_x, offset_y = max(0, MARGIN - min_x), max(0, MARGIN - min_y)
             for item in self.items:
                 if hasattr(item, 'pos'):
-                    cp = item.pos()
-                    item.setPos(cp.x() + offset_x, cp.y() + offset_y)
+                    item.setPos(item.pos().x() + offset_x, item.pos().y() + offset_y)
 
-
-    # --- Accessibility: Keyboard Shortcuts ---
     def keyPressEvent(self, event):
-        """Keyboard scaling and navigation for accessibility."""
         if event.key() == Qt.Key_Plus:
             self.scale(1.1, 1.1)
         elif event.key() == Qt.Key_Minus:
             self.scale(0.9, 0.9)
         elif event.key() == Qt.Key_Tab:
-            # Focus next widget (simple focus, optional: highlight it)
             self._focus_next_item()
         elif event.key() == Qt.Key_H:
             USER_THEME["color_high_contrast"] = not USER_THEME["color_high_contrast"]
@@ -1121,24 +689,11 @@ class DynamicCanvas(QGraphicsView):
             super().keyPressEvent(event)
 
     def _focus_next_item(self):
-        if not self.items:
-            return
-        # Find current focus
+        if not self.items: return
         focused = [i for i, item in enumerate(self.items) if item.hasFocus()]
-        next_idx = 0
-        if focused:
-            next_idx = (focused[0] + 1) % len(self.items)
+        next_idx = (focused[0] + 1) % len(self.items) if focused else 0
         self.items[next_idx].setFocus()
         self.items[next_idx].update()
-
-
-
-    def _remove_loop_indicator(self):
-        """Remove loop iteration indicator"""
-        if hasattr(self, '_loop_indicator') and self._loop_indicator.scene():
-            self.scene.removeItem(self._loop_indicator)
-
-
 
     def clear_all(self):
         self.scene.clear()
