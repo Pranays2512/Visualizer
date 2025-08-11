@@ -519,8 +519,17 @@ class ScopeWidget(GraphicsObjectWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         path = QPainterPath()
         path.addRoundedRect(self.boundingRect(), 10, 10)
-        painter.setPen(QPen(SCOPE_COLOR, 1.5, Qt.DashLine))
-        painter.setBrush(QColor(BACKGROUND_COLOR).lighter(110))
+
+        # Different colors for different scope types
+        if "🔧" in self.name:  # Function scope
+            painter.setPen(QPen(QColor("#50fa7b"), 2, Qt.SolidLine))  # Green for functions
+            color = QColor("#50fa7b")
+            color.setAlpha(20)
+            painter.setBrush(color)
+        else:
+            painter.setPen(QPen(SCOPE_COLOR, 1.5, Qt.DashLine))
+            painter.setBrush(QColor(BACKGROUND_COLOR).lighter(110))
+
         painter.drawPath(path)
 
 
@@ -558,6 +567,7 @@ class DynamicCanvas(QGraphicsView):
         return super().eventFilter(obj, event)
 
     def add_item(self, item: QGraphicsItem, item_type: Optional[str] = None):
+        """Add item with enhanced positioning logic for recursion"""
         if not item_type:
             if isinstance(item, SmartVariableWidget):
                 item_type = 'variable'
@@ -565,14 +575,15 @@ class DynamicCanvas(QGraphicsView):
                 item_type = 'print'
             elif isinstance(item, ScopeWidget):
                 item_type = 'scope'
-            elif hasattr(item, '__class__') and 'Widget' in item.__class__.__name__:
-                if item.__class__.__name__ in ['ArrayWidget', 'StringWidget', 'TreeWidget', 'ObjectWidget']:
-                    item_type = 'data_structure'
-                elif item.__class__.__name__ == 'DictionaryWidget':
-                    item_type = 'dictionary'
+
+        # Calculate recursion depth for scope positioning
+        recursion_depth = 0
+        if item_type == 'scope' and hasattr(item, 'name'):
+            recursion_depth = item.name.count('Call ') - item.name.count('Call 1')
+            recursion_depth = max(0, recursion_depth)
 
         predicted_pos = {
-            'scope': self._get_scope_position,
+            'scope': lambda: self._get_scope_position(recursion_depth),
             'data_structure': self._get_data_structure_position,
             'dictionary': self._get_data_structure_position,
             'print': self._get_next_print_position
@@ -583,23 +594,70 @@ class DynamicCanvas(QGraphicsView):
         self.items.append(item)
 
         if hasattr(item, 'show_animated'):
-            item.show_animated(delay=len(self.items) * 30)
-
-        if hasattr(item, '__class__') and 'Tree' in item.__class__.__name__:
-            QTimer.singleShot(100, self._auto_resize_canvas_for_tree)
+            # Stagger animations for better visual flow
+            delay = recursion_depth * 100 if item_type == 'scope' else len(self.items) * 30
+            item.show_animated(delay=delay)
 
         QTimer.singleShot(200, self._auto_resize_canvas)
 
-    def _get_scope_position(self):
+    def _get_scope_position(self, depth=0):
+        """Get position for scope widgets with depth-based cascading for recursion"""
         scopes = [item for item in self.items if isinstance(item, ScopeWidget)]
+
         if scopes:
-            rightmost = max(item.pos().x() + item.boundingRect().width() for item in self.items)
+            # For recursive calls, create a cascading pattern
+            if depth > 0:
+                base_x = 50 + (depth * 40)  # Indent based on recursion depth
+                base_y = MARGIN + (depth * 25)  # Slight vertical offset
+            else:
+                # For regular scopes, position to the right of existing items
+                rightmost = max(item.pos().x() + item.boundingRect().width() for item in self.items)
+                base_x = rightmost + H_SPACING
+                base_y = MARGIN
+
+            # Find the bottom-most scope to stack vertically
             bottom = max(scope.pos().y() + scope.boundingRect().height() for scope in scopes)
-            return QPointF(rightmost + H_SPACING, bottom + V_SPACING)
-        elif self.items:
+            return QPointF(base_x, max(base_y, bottom + V_SPACING))
+
+        return QPointF(50, MARGIN)
+
+    def _get_object_position(self):
+        """Get position for object widgets"""
+        objects = [item for item in self.items
+                   if hasattr(item, '__class__') and item.__class__.__name__ == 'ObjectWidget']
+
+        if objects:
+            # Stack objects vertically on the right side
             rightmost = max(item.pos().x() + item.boundingRect().width() for item in self.items)
-            return QPointF(rightmost + H_SPACING * 2, MARGIN)
-        return QPointF(400, MARGIN)
+            bottom = max(obj.pos().y() + obj.boundingRect().height() for obj in objects)
+            return QPointF(rightmost + H_SPACING, bottom + V_SPACING)
+        else:
+            # Position to the right of existing items
+            if self.items:
+                rightmost = max(item.pos().x() + item.boundingRect().width() for item in self.items)
+                return QPointF(rightmost + H_SPACING * 2, MARGIN)
+            return QPointF(300, MARGIN)
+
+    def _get_scope_position(self, depth=0):
+        """Get position for scope widgets with depth-based cascading for recursion"""
+        scopes = [item for item in self.items if isinstance(item, ScopeWidget)]
+
+        if scopes:
+            # For recursive calls, create a cascading pattern
+            if depth > 0:
+                base_x = 50 + (depth * 30)  # Indent based on recursion depth
+                base_y = MARGIN + (depth * 20)  # Slight vertical offset too
+            else:
+                # For regular scopes, position to the right of existing items
+                rightmost = max(item.pos().x() + item.boundingRect().width() for item in self.items)
+                base_x = rightmost + H_SPACING
+                base_y = MARGIN
+
+            # Find the bottom-most scope to stack vertically
+            bottom = max(scope.pos().y() + scope.boundingRect().height() for scope in scopes)
+            return QPointF(base_x, max(base_y, bottom + V_SPACING))
+
+        return QPointF(50, MARGIN)
 
     def _get_data_structure_position(self):
         data_structures = [item for item in self.items
