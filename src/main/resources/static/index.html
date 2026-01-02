@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frosted Java Visualizer</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+<div class="app-container">
+    <!-- Header -->
+    <header class="header">
+        <div class="logo">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+            </svg>
+            <span>Frosted Java Visualizer</span>
+        </div>
+        <div class="header-actions">
+            <button class="btn" onclick="resetEditor()">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="1 4 1 10 7 10"></polyline>
+                    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                </svg>
+                Reset
+            </button>
+            <button class="btn" onclick="toggleTheme()">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                </svg>
+                Theme
+            </button>
+            <button class="btn btn-primary" onclick="runVisualization()">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                Run & Visualize
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Layout -->
+    <main class="main-layout">
+        <!-- Editor Pane -->
+        <div class="editor-pane">
+            <div class="pane-header">
+                <span class="pane-title">Source Code</span>
+                <span class="file-name">Main.java</span>
+            </div>
+            <textarea id="codeEditor" spellcheck="false">public class Algorithm {
+    public static int factorial(int n) {
+        if (n <= 1) return 1;
+        return n * factorial(n - 1);
+    }
+
+    public static void main(String[] args) {
+        int result = factorial(5);
+
+        int[] numbers = {1, 2, 3, 4, 5};
+        for (int i = 0; i < numbers.length; i++) {
+            numbers[i] = numbers[i] * 2;
+        }
+    }
+}</textarea>
+
+            <div class="console-panel">
+                <div class="console-header">Console Output</div>
+                <pre id="consoleOutput"></pre>
+            </div>
+        </div>
+
+        <!-- Visualizer Pane -->
+        <div class="visualizer-pane">
+            <div class="pane-header">
+                <span class="pane-title">Live Execution Canvas</span>
+                <div class="playback-controls">
+                    <button onclick="prevStep()" class="control-btn">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="15 18 9 12 15 6"></polyline>
+                        </svg>
+                    </button>
+                    <span id="stepCounter">0 / 0</span>
+                    <button onclick="nextStep()" class="control-btn">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="9 18 15 12 9 6"></polyline>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <div id="canvas" class="canvas-container">
+                <div id="stepInfo" class="step-info">Ready to visualize. Click Run to start.</div>
+                <div id="callStackContainer" class="call-stack-overlay"></div>
+                <div id="vizBody" class="viz-grid">
+                    <!-- Dynamic widgets injected here -->
+                </div>
+            </div>
+        </div>
+    </main>
+</div>
+
+<script src="visualizer.js"></script>
+</body>
+</html>
